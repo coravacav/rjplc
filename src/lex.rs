@@ -1,3 +1,4 @@
+use color_eyre::eyre::Result;
 use nom::{
     branch::alt,
     bytes::complete::{tag, take_till, take_until, take_while},
@@ -8,7 +9,7 @@ use nom::{
     Finish,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Copy)]
 pub enum Op {
     Add,
     Sub,
@@ -253,7 +254,7 @@ pub fn nom_lex(input: &str) -> nom::IResult<&str, Vec<Token>> {
             ),
         )),
         Vec::new,
-        |mut acc: Vec<Token>, token: Option<Token>| {
+        |mut acc, token| {
             match token {
                 Some(Token::NEWLINE) if acc.last() == Some(&Token::NEWLINE) => {}
                 Some(token) => acc.push(token),
@@ -273,19 +274,21 @@ fn spaces_and_comments(input: &str) -> nom::IResult<&str, &str> {
     ))(input)
 }
 
-pub fn lex(input: &str) -> Result<Vec<Token>, nom::error::Error<&str>> {
-    if input.chars().any(|c| !matches!(c as u32, 10 | 32..=126)) {
-        return Err(nom::error::Error::new(input, nom::error::ErrorKind::Char));
+pub fn lex(input: &str) -> Result<Vec<Token>> {
+    if let Some(c) = input.chars().find(|&c| !matches!(c as u32, 10 | 32..=126)) {
+        color_eyre::eyre::bail!("Invalid character {c:?}");
     }
 
-    let (input, mut tokens) = nom_lex(input).finish()?;
+    let (input, mut tokens) = nom_lex(input)
+        .finish()
+        .map_err(|e| color_eyre::eyre::eyre!("{e}"))?;
 
     if input.is_empty() {
         tokens.push(Token::END_OF_FILE);
     } else {
         #[cfg(test)]
         dbg!(input);
-        return Err(nom::error::Error::new(input, nom::error::ErrorKind::Char));
+        color_eyre::eyre::bail!("Could not parse entire input");
     }
 
     Ok(tokens)
@@ -296,7 +299,7 @@ fn test_lex_correct() {
     use std::{fs, path::Path};
     let folder = Path::new("grader/hw2/lexer-tests1");
     if !folder.exists() {
-        panic!("Could not find hw2/lexer-tests1 directory");
+        panic!("Could not find {}", folder.display());
     }
 
     let mut all_test_paths = vec![];

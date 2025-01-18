@@ -1,4 +1,5 @@
 mod lex;
+mod parse;
 
 use std::path::PathBuf;
 
@@ -36,29 +37,50 @@ fn main() {
         lex = true;
     }
 
+    let file = match std::fs::read_to_string(&path) {
+        Ok(file) => file,
+        Err(e) => {
+            println!("Compilation failed {e}");
+            return;
+        }
+    };
+
+    let mut tokens = vec![];
+    let mut parsed = vec![];
+
     if lex {
-        let file = match std::fs::read_to_string(&path) {
-            Ok(file) => file,
+        tokens = match lex::lex(&file) {
+            Ok(tokens) => tokens,
             Err(e) => {
                 println!("Compilation failed {e}");
                 return;
             }
         };
 
-        let tokens = match lex::lex(&file) {
-            Ok(tokens) => tokens,
-            Err(e) => {
-                println!("Compilation failed {e:?}");
-                return;
-            }
-        };
-
         if !parse {
-            for token in tokens {
+            for token in &tokens {
                 println!("{}", token);
             }
         }
     }
+
+    if parse {
+        parsed = match parse::parse(&tokens) {
+            Ok(tokens) => tokens,
+            Err(e) => {
+                println!("Compilation failed {e}");
+                return;
+            }
+        };
+
+        if !typecheck {
+            for parsed in &parsed {
+                println!("{}", parsed);
+            }
+        }
+    }
+
+    let _ = parsed;
 
     println!("Compilation succeeded")
 }

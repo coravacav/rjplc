@@ -6,7 +6,7 @@ compile:
 	cargo build
 
 run:
-	cargo run -q -- $(TEST) -l
+	cargo run -q -- $(TEST) -p
 
 clean:
 	target
