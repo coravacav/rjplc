@@ -2,6 +2,9 @@ use color_eyre::eyre::Result;
 
 use crate::lex::{Op, Token};
 
+#[cfg(test)]
+use crate::{test_correct, test_solos};
+
 trait Consume<'a, 'b>: Sized {
     fn consume_maybe(tokens: &'b [Token<'a>]) -> Option<(&'b [Token<'a>], Self)>;
 }
@@ -365,44 +368,12 @@ fn test_parse_correct_ok() {
 }
 
 #[test]
-fn test_parse_correct_ok_fuzzer() {
-    use std::{fs, path::Path};
-    let folder = Path::new("grader/hw3/ok-fuzzer");
-    if !folder.exists() {
-        panic!("Could not find {}", folder.display());
-    }
-
+fn test_parse_correct() {
     use regex::Regex;
     let regex = Regex::new(r"\n\s+").unwrap();
 
-    let mut all_test_paths = vec![];
-    let mut all_solution_paths = vec![];
-
-    let test_paths = fs::read_dir(folder).unwrap();
-
-    let test_paths = test_paths
-        .flatten()
-        .filter(|f| f.file_type().unwrap().is_file())
-        .filter(|f| f.path().extension().unwrap() == "jpl");
-    for test_path in test_paths {
-        let test_path = test_path.path();
-        let mut solution_path = test_path.clone();
-        // add .expected to the end of the path
-        solution_path.set_extension("jpl.expected");
-
-        all_test_paths.push(test_path);
-        all_solution_paths.push(solution_path);
-    }
-
-    for (test_path, solution_path) in all_test_paths.iter().zip(all_solution_paths.iter()) {
-        println!("{}", test_path.display());
-        println!("{}", solution_path.display());
-        let file = fs::read_to_string(test_path).unwrap();
-        let solution_file = fs::read_to_string(solution_path).unwrap();
-
-        println!("{}", file);
-
-        let parsed = match parse(&crate::lex::lex(&file).expect("Lexing should work")) {
+    let tester = |file: &str, solution_file: &str| {
+        let parsed = match parse(&crate::lex::lex(file).expect("Lexing should work")) {
             Ok(parsed) => parsed,
             Err(e) => {
                 panic!("Compilation failed {e}");
@@ -418,78 +389,28 @@ fn test_parse_correct_ok_fuzzer() {
 
         if output != solution_file {
             let output = regex.replace_all(&output, " ");
-            let solution_file = regex.replace_all(&solution_file, " ");
+            let solution_file = regex.replace_all(solution_file, " ");
             pretty_assertions::assert_eq!(output, solution_file);
         } else {
             pretty_assertions::assert_eq!(output, solution_file);
         }
-    }
+    };
+
+    test_correct("grader/hw3/ok", tester);
+    test_correct("grader/hw3/ok-fuzzer", tester);
 }
 
 #[test]
-fn test_lex_fails_1() {
-    use std::{fs, path::Path};
-    let folder = Path::new("grader/hw3/fail-fuzzer1");
-    if !folder.exists() {
-        panic!("Could not find {}", folder.display());
-    }
-
-    let test_paths = fs::read_dir(folder)
-        .unwrap()
-        .flatten()
-        .filter(|f| f.file_type().unwrap().is_file())
-        .filter(|f| f.path().extension().unwrap() == "jpl");
-
-    for test_path in test_paths {
-        let file = fs::read_to_string(dbg!(test_path.path())).unwrap();
-        let tokens = crate::lex::lex(&file).unwrap();
-
-        assert!(parse(&tokens).is_err());
-    }
-}
-
-#[test]
-fn test_lex_fails_2() {
-    use std::{fs, path::Path};
-    let folder = Path::new("grader/hw3/fail-fuzzer2");
-    if !folder.exists() {
-        panic!("Could not find {}", folder.display());
-    }
-
-    let test_paths = fs::read_dir(folder)
-        .unwrap()
-        .flatten()
-        .filter(|f| f.file_type().unwrap().is_file())
-        .filter(|f| f.path().extension().unwrap() == "jpl");
-
-    for test_path in test_paths {
-        let file = fs::read_to_string(dbg!(test_path.path())).unwrap();
-        let tokens = crate::lex::lex(&file).unwrap();
-
-        assert!(parse(&tokens).is_err());
-    }
-}
-
-#[test]
-fn test_lex_fails_3() {
-    use std::{fs, path::Path};
-    let folder = Path::new("grader/hw3/fail-fuzzer3");
-    if !folder.exists() {
-        panic!("Could not find {}", folder.display());
-    }
-
-    let test_paths = fs::read_dir(folder)
-        .unwrap()
-        .flatten()
-        .filter(|f| f.file_type().unwrap().is_file())
-        .filter(|f| f.path().extension().unwrap() == "jpl");
-
-    for test_path in test_paths {
-        let file = fs::read_to_string(dbg!(test_path.path())).unwrap();
-        let Ok(tokens) = crate::lex::lex(&file) else {
-            continue;
+fn test_parse_fails() {
+    let tester = |file: Option<&str>| {
+        let Ok(tokens) = crate::lex::lex(file.unwrap()) else {
+            return;
         };
 
         assert!(parse(&tokens).is_err());
-    }
+    };
+
+    test_solos("grader/hw3/fail-fuzzer1", tester);
+    test_solos("grader/hw3/fail-fuzzer2", tester);
+    test_solos("grader/hw3/fail-fuzzer3", tester);
 }

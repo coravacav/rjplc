@@ -9,6 +9,9 @@ use nom::{
     Finish,
 };
 
+#[cfg(test)]
+use crate::{test_correct, test_solos};
+
 #[derive(Debug, Clone, PartialEq, Eq, Copy)]
 pub enum Op {
     Add,
@@ -296,96 +299,38 @@ pub fn lex(input: &str) -> Result<Vec<Token>> {
 
 #[test]
 fn test_lex_correct() {
-    use std::{fs, path::Path};
-    let folder = Path::new("grader/hw2/lexer-tests1");
-    if !folder.exists() {
-        panic!("Could not find {}", folder.display());
-    }
+    test_correct(
+        "grader/hw2/lexer-tests1",
+        |file: &str, solution_file: &str| {
+            let tokens = lex(file).unwrap();
 
-    let mut all_test_paths = vec![];
-    let mut all_solution_paths = vec![];
+            let mut output = String::new();
 
-    let test_paths = fs::read_dir(folder).unwrap();
-
-    let test_paths = test_paths
-        .flatten()
-        .filter(|f| f.file_type().unwrap().is_file())
-        .filter(|f| f.path().extension().unwrap() == "jpl");
-    for test_path in test_paths {
-        let test_path = test_path.path();
-        let mut solution_path = test_path.clone();
-        // add .expected to the end of the path
-        solution_path.set_extension("jpl.expected");
-
-        all_test_paths.push(test_path);
-        all_solution_paths.push(solution_path);
-    }
-
-    for (test_path, solution_path) in all_test_paths.iter().zip(all_solution_paths.iter()) {
-        println!("{}", test_path.display());
-        println!("{}", solution_path.display());
-        let file = fs::read_to_string(test_path).unwrap();
-        let solution_file = fs::read_to_string(solution_path).unwrap();
-
-        println!("{}", file);
-
-        let tokens = match lex(&file) {
-            Ok(tokens) => tokens,
-            Err(e) => {
-                panic!("Compilation failed {e}");
+            for token in tokens {
+                use std::fmt::Write;
+                writeln!(output, "{}", token).unwrap();
             }
-        };
 
-        let mut output = String::new();
-
-        for token in tokens {
-            use std::fmt::Write;
-            writeln!(output, "{}", token).unwrap();
-        }
-
-        pretty_assertions::assert_eq!(output, solution_file);
-    }
+            pretty_assertions::assert_eq!(output, solution_file);
+        },
+    );
 }
 
 #[test]
 fn test_lex_success() {
-    use std::{fs, path::Path};
-    let folder = Path::new("grader/hw2/lexer-tests2");
-    if !folder.exists() {
-        panic!("Could not find {}", folder.display());
-    }
-
-    let test_paths = fs::read_dir(folder)
-        .unwrap()
-        .flatten()
-        .filter(|f| f.file_type().unwrap().is_file())
-        .filter(|f| f.path().extension().unwrap() == "jpl");
-
-    for test_path in test_paths {
-        let file = fs::read_to_string(test_path.path()).unwrap();
-
-        assert!(lex(&file).is_ok());
-    }
+    test_solos("grader/hw2/lexer-tests2", |file| {
+        let file = file.unwrap();
+        assert!(lex(file).is_ok());
+    });
 }
 
 #[test]
-#[should_panic]
 fn test_lex_fails() {
-    use std::{fs, path::Path};
-    let folder = Path::new("grader/hw2/lexer-tests3");
-    if !folder.exists() {
-        panic!("Could not find {}", folder.display());
-    }
+    test_solos("grader/hw2/lexer-tests3", |file| {
+        let Some(file) = file else {
+            return;
+        };
 
-    let test_paths = fs::read_dir(folder)
-        .unwrap()
-        .flatten()
-        .filter(|f| f.file_type().unwrap().is_file())
-        .filter(|f| f.path().extension().unwrap() == "jpl");
-
-    for test_path in test_paths {
-        let file = fs::read_to_string(dbg!(test_path.path())).unwrap();
-
-        assert!(lex(&file).is_err());
-    }
+        assert!(lex(file).is_err());
+    });
 }

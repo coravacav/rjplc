@@ -3,10 +3,10 @@ TEST=test.jpl
 all: run
 
 compile:
-	cargo build
+	cargo build --release
 
 run:
-	cargo run -q -- $(TEST) -p
+	target/release/template $(TEST) -l
 
 clean:
 	target
