@@ -26,8 +26,22 @@ fn main() {
         path,
         mut lex,
         mut parse,
-        typecheck,
+        mut typecheck,
     } = Cli::parse();
+
+    let homework_detect = regex::Regex::new(r"/grader/hw(\d+)/").unwrap();
+    if let Some(homework) = homework_detect.captures(&path.display().to_string()) {
+        let homework = &homework[1];
+        match homework.parse::<u8>() {
+            Ok(2) => lex = true,
+            Ok(3) => parse = true,
+            Ok(4) => parse = true,
+            Ok(5) => parse = true,
+            Ok(6) => typecheck = true,
+            Ok(i) if i > 6 => panic!("Unknown homework {i}"),
+            _ => {}
+        }
+    }
 
     if typecheck {
         parse = true;
