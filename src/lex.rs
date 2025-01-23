@@ -47,7 +47,7 @@ impl std::fmt::Display for Op {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Copy)]
 #[allow(non_camel_case_types, clippy::upper_case_acronyms)]
 pub enum Token<'a> {
     ARRAY,
@@ -90,6 +90,8 @@ pub enum Token<'a> {
     VARIABLE(&'a str),
     VOID,
     WRITE,
+    #[cfg(feature = "type_keyword")]
+    TYPE,
 }
 
 impl std::fmt::Display for Token<'_> {
@@ -135,6 +137,8 @@ impl std::fmt::Display for Token<'_> {
             Token::VARIABLE(s) => write!(f, "VARIABLE '{s}'"),
             Token::VOID => write!(f, "VOID 'void'"),
             Token::WRITE => write!(f, "WRITE 'write'"),
+            #[cfg(feature = "type_keyword")]
+            Token::TYPE => write!(f, "TYPE 'type'"),
         }
     }
 }
@@ -194,6 +198,8 @@ fn variable_or_keyword(input: &str) -> nom::IResult<&str, Token> {
             "true" => Token::TRUE,
             "void" => Token::VOID,
             "write" => Token::WRITE,
+            #[cfg(feature = "type_keyword")]
+            "type" => Token::TYPE,
             s => Token::VARIABLE(s),
         },
     )(input)
