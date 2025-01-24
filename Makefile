@@ -8,7 +8,7 @@ compile:
 	cargo build --release
 
 run:
-	target/release/template $(TEST)
+	target/release/rjplc $(TEST)
 
 clean:
 	target
