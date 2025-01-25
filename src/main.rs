@@ -66,7 +66,10 @@ fn main() {
         tokens = match lex::lex(&file) {
             Ok(tokens) => tokens,
             Err(e) => {
+                #[cfg(not(feature = "homework"))]
                 println!("Compilation failed {e}");
+                #[cfg(feature = "homework")]
+                println!("Compilation failed {e:?}");
                 return;
             }
         };
@@ -82,7 +85,10 @@ fn main() {
         parsed = match parse::parse(&tokens) {
             Ok(tokens) => tokens,
             Err(e) => {
+                #[cfg(not(feature = "homework"))]
                 println!("Compilation failed {e}");
+                #[cfg(feature = "homework")]
+                println!("Compilation failed {e:?}");
                 return;
             }
         };

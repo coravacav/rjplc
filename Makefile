@@ -5,7 +5,7 @@ TEST=test.jpl
 all: run
 
 compile:
-	cargo build --release
+	cargo build --release --features homework
 
 run:
 	target/release/rjplc $(TEST)

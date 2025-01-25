@@ -90,7 +90,6 @@ pub enum Token<'a> {
     VARIABLE(&'a str),
     VOID,
     WRITE,
-    #[cfg(feature = "type_keyword")]
     TYPE,
 }
 
@@ -137,7 +136,6 @@ impl std::fmt::Display for Token<'_> {
             Token::VARIABLE(s) => write!(f, "VARIABLE '{s}'"),
             Token::VOID => write!(f, "VOID 'void'"),
             Token::WRITE => write!(f, "WRITE 'write'"),
-            #[cfg(feature = "type_keyword")]
             Token::TYPE => write!(f, "TYPE 'type'"),
         }
     }
@@ -285,7 +283,7 @@ fn spaces_and_comments(input: &str) -> nom::IResult<&str, &str> {
 
 pub fn lex(input: &str) -> Result<Vec<Token>> {
     if let Some(c) = input.chars().find(|&c| !matches!(c as u32, 10 | 32..=126)) {
-        color_eyre::eyre::bail!("Invalid character {c:?}");
+        color_eyre::eyre::bail!("invalid character {c:?}");
     }
 
     let (input, mut tokens) = nom_lex(input)
@@ -295,9 +293,9 @@ pub fn lex(input: &str) -> Result<Vec<Token>> {
     if input.is_empty() {
         tokens.push(Token::END_OF_FILE);
     } else {
-        #[cfg(test)]
-        dbg!(input);
-        color_eyre::eyre::bail!("Could not parse entire input");
+        // #[cfg(test)]
+        // dbg!(input);
+        color_eyre::eyre::bail!("could not lex entire input");
     }
 
     Ok(tokens)
