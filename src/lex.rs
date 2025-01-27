@@ -47,7 +47,7 @@ impl std::fmt::Display for Op {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Copy)]
+#[derive(Debug, Clone, Copy)]
 #[allow(non_camel_case_types, clippy::upper_case_acronyms)]
 pub enum Token<'a> {
     ARRAY,
@@ -91,6 +91,18 @@ pub enum Token<'a> {
     VOID,
     WRITE,
     TYPE,
+}
+
+impl PartialEq for Token<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Token::FLOATVAL(a), Token::FLOATVAL(b)) => a.as_ptr() == b.as_ptr(),
+            (Token::INTVAL(a), Token::INTVAL(b)) => a.as_ptr() == b.as_ptr(),
+            (Token::STRING(a), Token::STRING(b)) => a.as_ptr() == b.as_ptr(),
+            (Token::VARIABLE(a), Token::VARIABLE(b)) => a.as_ptr() == b.as_ptr(),
+            _ => std::mem::discriminant(self) == std::mem::discriminant(other),
+        }
+    }
 }
 
 impl std::fmt::Display for Token<'_> {
