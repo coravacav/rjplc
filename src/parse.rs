@@ -144,7 +144,7 @@ impl<'a> Parser<'a> {
             .fold(String::new(), |acc, (line, newline_count)| {
                 format!(
                     "{acc}{}{line}\n",
-                    format!("{newline_count:newline_padding$} | ").dimmed()
+                    format!("{newline_count:newline_padding$} | ").bright_blue()
                 )
             });
 
