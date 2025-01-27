@@ -127,7 +127,7 @@ impl<'a> Parser<'a> {
 
         let semi_valid = semi_valid
             .lines()
-            .map(|line| line.green().to_string())
+            .map(|line| line.green().dimmed().to_string())
             .join("\n");
 
         let error = error.lines().map(|line| line.red().to_string()).join("\n");
@@ -480,29 +480,6 @@ fn consume_list<'a, 'b, T: Consume<'a>>(
 
     Ok((tokens, list))
 }
-
-// fn consume_comma_expr_list<'a, 'b>(
-//     mut tokens: Parser<'a>,
-//     end_token: Token,
-// ) -> Option<(Parser<'a>, Vec<Expr<'a>>)> {
-//     let mut exprs = vec![];
-//     loop {
-//         if tokens.check_one_then_skip(end_token).is_some() {
-//             break;
-//         }
-
-//         let (rem_tokens, expr) = Expr::consume_maybe(tokens)?;
-//         tokens = rem_tokens;
-//         exprs.push(expr);
-//         if tokens.check_one_then_skip(Token::COMMA).is_none()
-//             && tokens.check_one_then_skip(end_token).is_some()
-//         {
-//             break;
-//         };
-//     }
-
-//     Some((tokens, exprs))
-// }
 
 impl<'a> Consume<'a> for Expr<'a> {
     fn consume(tokens: Parser<'a>) -> Result<(Parser<'a>, Expr<'a>)> {

@@ -30,17 +30,20 @@ fn main() {
         mut typecheck,
     } = Cli::parse();
 
-    let homework_detect = regex::Regex::new(r"/grader/hw(\d+)/").unwrap();
-    if let Some(homework) = homework_detect.captures(&path.display().to_string()) {
-        let homework = &homework[1];
-        match homework.parse::<u8>() {
-            Ok(2) => lex = true,
-            Ok(3) => parse = true,
-            Ok(4) => parse = true,
-            Ok(5) => parse = true,
-            Ok(6) => typecheck = true,
-            Ok(i) if i > 6 => panic!("Unknown homework {i}"),
-            _ => {}
+    #[cfg(feature = "homework")]
+    {
+        let homework_detect = regex::Regex::new(r"/grader/hw(\d+)/").unwrap();
+        if let Some(homework) = homework_detect.captures(&path.display().to_string()) {
+            let homework = &homework[1];
+            match homework.parse::<u8>() {
+                Ok(2) => lex = true,
+                Ok(3) => parse = true,
+                Ok(4) => parse = true,
+                Ok(5) => parse = true,
+                Ok(6) => typecheck = true,
+                Ok(i) if i > 6 => panic!("Unknown homework {i}"),
+                _ => {}
+            }
         }
     }
 
@@ -67,10 +70,11 @@ fn main() {
 
     let (tokens, input_by_token) = match lex::lex(&file) {
         Ok(tokens) => tokens,
+        #[allow(unused_variables)]
         Err(e) => {
-            #[cfg(not(feature = "homework"))]
-            println!("Compilation failed {e}");
             #[cfg(feature = "homework")]
+            println!("Compilation failed");
+            #[cfg(not(feature = "homework"))]
             println!("Compilation failed {e:?}");
             return;
         }
@@ -81,15 +85,17 @@ fn main() {
             println!("{}", token);
         }
 
+        println!("Compilation succeeded");
         return;
     }
 
     let parsed = match parse::parse(&tokens, &input_by_token, &file) {
         Ok(tokens) => tokens,
+        #[allow(unused_variables)]
         Err(e) => {
-            #[cfg(not(feature = "homework"))]
-            println!("Compilation failed {e}");
             #[cfg(feature = "homework")]
+            println!("Compilation failed");
+            #[cfg(not(feature = "homework"))]
             println!("Compilation failed {e:?}");
             return;
         }
