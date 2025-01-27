@@ -4,7 +4,7 @@ use nom::{
     bytes::complete::{tag, take_till, take_until, take_while},
     character::complete::{char, digit1, one_of, satisfy},
     combinator::{map, opt, recognize, value},
-    multi::{fold_many1, many1},
+    multi::many1,
     sequence::{delimited, preceded, terminated, tuple},
     Finish,
 };
@@ -196,7 +196,6 @@ fn variable_or_keyword(input: &str) -> nom::IResult<&str, Token> {
             "true" => Token::TRUE,
             "void" => Token::VOID,
             "write" => Token::WRITE,
-            #[cfg(feature = "type_keyword")]
             "type" => Token::TYPE,
             s => Token::VARIABLE(s),
         },
@@ -232,9 +231,18 @@ fn op(input: &str) -> nom::IResult<&str, Token> {
     )(input)
 }
 
-pub fn nom_lex(input: &str) -> nom::IResult<&str, Vec<Token>> {
-    fold_many1(
-        alt((
+pub fn nom_lex(input: &str) -> nom::IResult<&str, (Vec<Token>, Vec<&str>)> {
+    let mut acc = vec![];
+    let mut input_by_token = vec![];
+
+    let mut input = input;
+
+    loop {
+        if input.is_empty() {
+            break;
+        }
+
+        let (remaining_input, token) = alt((
             map(many1(spaces_and_comments), |_| None),
             map(
                 alt((
@@ -259,18 +267,23 @@ pub fn nom_lex(input: &str) -> nom::IResult<&str, Vec<Token>> {
                 )),
                 Option::Some,
             ),
-        )),
-        Vec::new,
-        |mut acc, token| {
-            match token {
-                Some(Token::NEWLINE) if acc.last() == Some(&Token::NEWLINE) => {}
-                Some(token) => acc.push(token),
-                None => {}
-            }
+        ))(input)?;
 
-            acc
-        },
-    )(input)
+        let consumed_input = &input[..input.len() - remaining_input.len()];
+
+        input = remaining_input;
+
+        match token {
+            Some(Token::NEWLINE) if acc.last() == Some(&Token::NEWLINE) => {}
+            Some(token) => {
+                acc.push(token);
+                input_by_token.push(consumed_input);
+            }
+            None => {}
+        }
+    }
+
+    Ok((input, (acc, (input_by_token))))
 }
 
 fn spaces_and_comments(input: &str) -> nom::IResult<&str, &str> {
@@ -281,14 +294,16 @@ fn spaces_and_comments(input: &str) -> nom::IResult<&str, &str> {
     ))(input)
 }
 
-pub fn lex(input: &str) -> Result<Vec<Token>> {
+pub fn lex(input: &str) -> Result<(Vec<Token>, Vec<&str>)> {
     if let Some(c) = input.chars().find(|&c| !matches!(c as u32, 10 | 32..=126)) {
         color_eyre::eyre::bail!("invalid character {c:?}");
     }
 
-    let (input, mut tokens) = nom_lex(input)
+    let (input, (mut tokens, input_by_token)) = nom_lex(input)
         .finish()
         .map_err(|e| color_eyre::eyre::eyre!("{e}"))?;
+
+    debug_assert_eq!(tokens.len(), input_by_token.len());
 
     if input.is_empty() {
         tokens.push(Token::END_OF_FILE);
@@ -298,7 +313,7 @@ pub fn lex(input: &str) -> Result<Vec<Token>> {
         color_eyre::eyre::bail!("could not lex entire input");
     }
 
-    Ok(tokens)
+    Ok((tokens, input_by_token))
 }
 
 #[test]
@@ -306,7 +321,7 @@ fn test_lex_correct() {
     test_correct(
         "grader/hw2/lexer-tests1",
         |file: &str, solution_file: &str| {
-            let tokens = lex(file).unwrap();
+            let (tokens, _) = lex(file).unwrap();
 
             let mut output = String::new();
 

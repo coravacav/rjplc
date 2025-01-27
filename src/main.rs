@@ -4,6 +4,7 @@ mod parse;
 use std::path::PathBuf;
 
 use clap::Parser;
+use itertools::Itertools;
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -59,50 +60,149 @@ fn main() {
         }
     };
 
-    let mut tokens = vec![];
-    let mut parsed = vec![];
-
-    if lex {
-        tokens = match lex::lex(&file) {
-            Ok(tokens) => tokens,
-            Err(e) => {
-                #[cfg(not(feature = "homework"))]
-                println!("Compilation failed {e}");
-                #[cfg(feature = "homework")]
-                println!("Compilation failed {e:?}");
-                return;
-            }
-        };
-
-        if !parse {
-            for token in &tokens {
-                println!("{}", token);
-            }
-        }
+    if !lex {
+        println!("Compilation failed, nothing done");
+        return;
     }
 
-    if parse {
-        parsed = match parse::parse(&tokens) {
-            Ok(tokens) => tokens,
-            Err(e) => {
-                #[cfg(not(feature = "homework"))]
-                println!("Compilation failed {e}");
-                #[cfg(feature = "homework")]
-                println!("Compilation failed {e:?}");
-                return;
-            }
-        };
-
-        if !typecheck {
-            for parsed in &parsed {
-                println!("{}", parsed);
-            }
+    let (tokens, input_by_token) = match lex::lex(&file) {
+        Ok(tokens) => tokens,
+        Err(e) => {
+            #[cfg(not(feature = "homework"))]
+            println!("Compilation failed {e}");
+            #[cfg(feature = "homework")]
+            println!("Compilation failed {e:?}");
+            return;
         }
+    };
+
+    if !parse {
+        for token in &tokens {
+            println!("{}", token);
+        }
+
+        return;
+    }
+
+    let parsed = match parse::parse(&tokens, &input_by_token, &file) {
+        Ok(tokens) => tokens,
+        Err(e) => {
+            #[cfg(not(feature = "homework"))]
+            println!("Compilation failed {e}");
+            #[cfg(feature = "homework")]
+            println!("Compilation failed {e:?}");
+            return;
+        }
+    };
+
+    if !typecheck {
+        for parsed in &parsed {
+            println!("{}", parsed);
+        }
+
+        println!("Compilation succeeded");
+        return;
     }
 
     let _ = parsed;
+}
 
-    println!("Compilation succeeded")
+#[derive(Debug, Clone, Copy)]
+enum UndoSliceSelection<'a> {
+    Boundless,
+    Beginning(&'a str),
+    End(&'a str),
+}
+
+fn undo_slice<'a>(
+    original: &'a str,
+    a: UndoSliceSelection<'a>,
+    b: UndoSliceSelection<'a>,
+) -> &'a str {
+    fn resolve_idx(
+        original: &'_ str,
+        undo_selection: UndoSliceSelection<'_>,
+        default: usize,
+    ) -> usize {
+        match undo_selection {
+            UndoSliceSelection::Beginning(undo_selection) => {
+                undo_selection.as_ptr() as usize - original.as_ptr() as usize
+            }
+            UndoSliceSelection::End(undo_selection) => {
+                undo_selection.as_ptr() as usize + undo_selection.len() - original.as_ptr() as usize
+            }
+            UndoSliceSelection::Boundless => default,
+        }
+    }
+
+    let start = resolve_idx(original, a, 0);
+    let end = resolve_idx(original, b, original.len());
+
+    assert!(start <= end);
+
+    &original[start..end]
+}
+
+#[test]
+fn test_undo_slice() {
+    let original = "hello world";
+    assert_eq!(
+        undo_slice(
+            original,
+            UndoSliceSelection::Boundless,
+            UndoSliceSelection::Boundless
+        ),
+        original
+    );
+
+    let slice = &original[1..4];
+
+    assert_eq!(
+        undo_slice(
+            original,
+            UndoSliceSelection::Boundless,
+            UndoSliceSelection::End(slice)
+        ),
+        "hell"
+    );
+
+    let slice = &original[1..4];
+
+    assert_eq!(
+        undo_slice(
+            original,
+            UndoSliceSelection::Beginning(slice),
+            UndoSliceSelection::End(slice)
+        ),
+        "ell"
+    );
+
+    let slice = &original[1..4];
+
+    assert_eq!(
+        undo_slice(
+            original,
+            UndoSliceSelection::Boundless,
+            UndoSliceSelection::Beginning(slice),
+        ),
+        "h"
+    );
+}
+
+fn undo_slice_by_cuts<'a, const N: usize, const M: usize>(
+    original: &'a str,
+    cuts: [UndoSliceSelection<'a>; N],
+) -> [&'a str; M] {
+    const {
+        assert!(N - 1 == M);
+    }
+
+    cuts.iter()
+        .tuple_windows()
+        .map(|(a, b)| undo_slice(original, *a, *b))
+        .collect::<Vec<_>>()
+        .try_into()
+        .unwrap()
 }
 
 #[cfg(test)]

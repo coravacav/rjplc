@@ -1,12 +1,20 @@
-use color_eyre::eyre::{bail, eyre, Context, OptionExt, Result};
+use std::{cell::Cell, rc::Rc};
 
-use crate::lex::{Op, Token};
+use color_eyre::eyre::{bail, eyre, Context, OptionExt, Result};
+use colored::Colorize;
+use itertools::Itertools;
+
+use crate::{
+    lex::{Op, Token},
+    undo_slice_by_cuts, UndoSliceSelection,
+};
 
 #[cfg(test)]
 use crate::{test_correct, test_solos};
 
-trait Consume<'a, 'b>: Sized {
-    fn consume(tokens: &'b [Token<'a>]) -> Result<(&'b [Token<'a>], Self)>;
+trait Consume<'a>: Sized {
+    fn consume(tokens: Parser<'a>) -> Result<(Parser<'a>, Self)>;
+    #[allow(dead_code)]
     fn get_name(&self) -> &'static str;
 }
 
@@ -29,25 +37,29 @@ impl<T: std::fmt::Display> PrintJoined for [T] {
     }
 }
 
-trait ParserHelper {
-    fn skip_one(&mut self);
-    fn next_and_skip(&mut self) -> Result<&Token<'_>>;
-    fn check_skip(&mut self, token: Token<'_>) -> Result<()>;
-    fn check_one(&self, token: Token<'_>) -> bool;
+#[derive(Debug, Clone, PartialEq)]
+struct Parser<'a> {
+    original_tokens: &'a [Token<'a>],
+    current_position: Cell<usize>,
+    input_by_token: &'a [&'a str],
+    successfully_parsed: Rc<Cell<usize>>,
+    source: &'a str,
 }
 
-impl ParserHelper for &[Token<'_>] {
-    fn skip_one(&mut self) {
-        *self = &self[1..]
+impl<'a> Parser<'a> {
+    fn skip_one(&self) {
+        self.current_position.set(self.current_position.get() + 1);
+        self.successfully_parsed
+            .set(self.successfully_parsed.get() + 1);
     }
 
-    fn next_and_skip(&mut self) -> Result<&Token<'_>> {
+    fn next_and_skip(&mut self) -> Result<Token<'a>> {
         let next = self.first();
         self.skip_one();
         next.ok_or_eyre("Unexpected end of tokens")
     }
 
-    fn check_skip(&mut self, token: Token<'_>) -> Result<()> {
+    fn check_skip(&mut self, token: Token<'a>) -> Result<()> {
         if self.check_one(token) {
             self.skip_one();
             Ok(())
@@ -56,8 +68,87 @@ impl ParserHelper for &[Token<'_>] {
         }
     }
 
-    fn check_one(&self, token: Token<'_>) -> bool {
-        self.first() == Some(&token)
+    fn check_one(&self, token: Token<'a>) -> bool {
+        self.first() == Some(token)
+    }
+
+    fn first(&self) -> Option<Token<'a>> {
+        self.original_tokens
+            .get(self.current_position.get())
+            .copied()
+    }
+
+    fn next(&self) -> Option<Token<'a>> {
+        let next = self.first();
+        self.skip_one();
+        next
+    }
+
+    fn is_empty(&self) -> bool {
+        self.current_position.get() == self.original_tokens.len()
+    }
+
+    /// This function prints the error token text in red and the surrounding text.
+    fn print_error(&self) {
+        let current_position = self.current_position.get();
+        let error_position = current_position + self.successfully_parsed.get();
+
+        let [source_pre, semi_valid, error, source_post] = undo_slice_by_cuts(
+            self.source,
+            [
+                UndoSliceSelection::Boundless,
+                UndoSliceSelection::Beginning(self.input_by_token[current_position]),
+                UndoSliceSelection::Beginning(self.input_by_token[error_position]),
+                UndoSliceSelection::End(self.input_by_token[error_position]),
+                UndoSliceSelection::Boundless,
+            ],
+        );
+
+        let (source_pre, newlines, newline_padding) = {
+            let mut src_iter = source_pre.split('\n').rev();
+
+            let source_pre = src_iter
+                .by_ref()
+                .take(2)
+                .map(|line| line.dimmed().to_string())
+                .collect_vec()
+                .iter()
+                .rev()
+                .join("\n");
+
+            let lines_before = src_iter.count();
+
+            (
+                source_pre,
+                lines_before..,
+                lines_before.to_string().len() + 1,
+            )
+        };
+
+        let semi_valid = semi_valid
+            .lines()
+            .map(|line| line.green().to_string())
+            .join("\n");
+
+        let error = error.lines().map(|line| line.red().to_string()).join("\n");
+
+        let source_post = source_post
+            .lines()
+            .take(2)
+            .map(|line| line.dimmed().to_string())
+            .join("\n");
+
+        let output = format!("{}{}{}{}", source_pre, semi_valid, error, source_post)
+            .lines()
+            .zip(newlines)
+            .fold(String::new(), |acc, (line, newline_count)| {
+                format!(
+                    "{acc}{}{line}\n",
+                    format!("{newline_count:newline_padding$} | ").dimmed()
+                )
+            });
+
+        println!("{}", output);
     }
 }
 
@@ -70,15 +161,14 @@ impl std::fmt::Display for Variable<'_> {
     }
 }
 
-impl<'a, 'b> Consume<'a, 'b> for Variable<'a> {
-    fn consume(mut tokens: &'b [Token<'a>]) -> Result<(&'b [Token<'a>], Self)> {
-        let s = match tokens.first() {
+impl<'a> Consume<'a> for Variable<'a> {
+    fn consume(tokens: Parser<'a>) -> Result<(Parser<'a>, Self)> {
+        let s = match tokens.next() {
             Some(Token::VARIABLE(s)) => s,
             Some(t) => bail!("expected variable, found {t:?}"),
             None => bail!("expected a variable, unexpected end of tokens"),
         };
 
-        tokens.skip_one();
         Ok((tokens, Self(s)))
     }
 
@@ -96,8 +186,8 @@ impl std::fmt::Display for LiteralString<'_> {
     }
 }
 
-impl<'a, 'b> Consume<'a, 'b> for LiteralString<'a> {
-    fn consume(mut tokens: &'b [Token<'a>]) -> Result<(&'b [Token<'a>], Self)> {
+impl<'a> Consume<'a> for LiteralString<'a> {
+    fn consume(tokens: Parser<'a>) -> Result<(Parser<'a>, Self)> {
         let s = match tokens.first() {
             Some(Token::STRING(s)) => s,
             Some(t) => bail!("expected string, found {t:?}"),
@@ -126,8 +216,8 @@ pub enum Cmd<'a> {
     Type(Variable<'a>, Type<'a>),
 }
 
-impl<'a, 'b> Consume<'a, 'b> for Cmd<'a> {
-    fn consume(mut tokens: &'b [Token<'a>]) -> Result<(&'b [Token<'a>], Self)> {
+impl<'a> Consume<'a> for Cmd<'a> {
+    fn consume(mut tokens: Parser<'a>) -> Result<(Parser<'a>, Self)> {
         match tokens.next_and_skip()? {
             Token::READ => {
                 tokens.check_skip(Token::IMAGE).wrap_err("parsing read command")?;
@@ -242,8 +332,8 @@ impl std::fmt::Display for Statement<'_> {
     }
 }
 
-impl<'a, 'b> Consume<'a, 'b> for Statement<'a> {
-    fn consume(mut tokens: &'b [Token<'a>]) -> Result<(&'b [Token<'a>], Self)> {
+impl<'a> Consume<'a> for Statement<'a> {
+    fn consume(tokens: Parser<'a>) -> Result<(Parser<'a>, Self)> {
         match tokens.first() {
             Some(Token::ASSERT) => {
                 tokens.skip_one();
@@ -365,18 +455,18 @@ impl std::fmt::Display for Expr<'_> {
     }
 }
 
-fn consume_list<'a, 'b, T: Consume<'a, 'b>>(
-    mut tokens: &'b [Token<'a>],
+fn consume_list<'a, 'b, T: Consume<'a>>(
+    mut tokens: Parser<'a>,
     end_token: Token<'a>,
     delimeter: Token<'a>,
-) -> Result<(&'b [Token<'a>], Vec<T>)> {
+) -> Result<(Parser<'a>, Vec<T>)> {
     let mut list = vec![];
     loop {
         if tokens.check_skip(end_token).is_ok() {
             break;
         }
 
-        let (rem_tokens, t) = T::consume(tokens)?;
+        let (rem_tokens, t) = T::consume(tokens.clone())?;
         if tokens == rem_tokens {
             return Err(eyre!("Could not parse"));
         }
@@ -392,9 +482,9 @@ fn consume_list<'a, 'b, T: Consume<'a, 'b>>(
 }
 
 // fn consume_comma_expr_list<'a, 'b>(
-//     mut tokens: &'b [Token<'a>],
+//     mut tokens: Parser<'a>,
 //     end_token: Token,
-// ) -> Option<(&'b [Token<'a>], Vec<Expr<'a>>)> {
+// ) -> Option<(Parser<'a>, Vec<Expr<'a>>)> {
 //     let mut exprs = vec![];
 //     loop {
 //         if tokens.check_one_then_skip(end_token).is_some() {
@@ -414,8 +504,8 @@ fn consume_list<'a, 'b, T: Consume<'a, 'b>>(
 //     Some((tokens, exprs))
 // }
 
-impl<'a, 'b> Consume<'a, 'b> for Expr<'a> {
-    fn consume(mut tokens: &'b [Token<'a>]) -> Result<(&'b [Token<'a>], Expr<'a>)> {
+impl<'a> Consume<'a> for Expr<'a> {
+    fn consume(tokens: Parser<'a>) -> Result<(Parser<'a>, Expr<'a>)> {
         let (mut tokens, mut expr) = match tokens.first() {
             Some(Token::INTVAL(s)) => {
                 tokens.skip_one();
@@ -475,7 +565,7 @@ impl<'a, 'b> Consume<'a, 'b> for Expr<'a> {
             ),
         };
 
-        let (mut tokens, expr) = loop {
+        let (tokens, expr) = loop {
             match (tokens.first(), &expr) {
                 (Some(Token::LSQUARE), _) => {
                     tokens.skip_one();
@@ -508,7 +598,7 @@ impl<'a, 'b> Consume<'a, 'b> for Expr<'a> {
             Some(Token::OP(c @ Op::Eq)) => {
                 tokens.skip_one();
                 let (tokens, expr2) = Expr::consume(tokens).wrap_err("parsing binary op expr")?;
-                (tokens, Expr::Binop(Box::new(expr), *c, Box::new(expr2)))
+                (tokens, Expr::Binop(Box::new(expr), c, Box::new(expr2)))
             }
             _ => (tokens, expr),
         };
@@ -544,9 +634,9 @@ impl std::fmt::Display for LValue<'_> {
     }
 }
 
-impl<'a, 'b> Consume<'a, 'b> for LValue<'a> {
-    fn consume(mut tokens: &'b [Token<'a>]) -> Result<(&'b [Token<'a>], Self)> {
-        if let Ok((tokens, arg)) = Argument::consume(tokens) {
+impl<'a> Consume<'a> for LValue<'a> {
+    fn consume(tokens: Parser<'a>) -> Result<(Parser<'a>, Self)> {
+        if let Ok((tokens, arg)) = Argument::consume(tokens.clone()) {
             return match arg {
                 // This is really weird hw3 special casing.
                 Argument::Var(s) => Ok((tokens, LValue::Var(s))),
@@ -600,8 +690,8 @@ impl std::fmt::Display for Type<'_> {
     }
 }
 
-impl<'a, 'b> Consume<'a, 'b> for Type<'a> {
-    fn consume(mut tokens: &'b [Token<'a>]) -> Result<(&'b [Token<'a>], Self)> {
+impl<'a> Consume<'a> for Type<'a> {
+    fn consume(tokens: Parser<'a>) -> Result<(Parser<'a>, Self)> {
         let (mut tokens, ty) = match tokens.first() {
             Some(Token::VARIABLE(s)) => {
                 tokens.skip_one();
@@ -661,8 +751,8 @@ impl std::fmt::Display for Binding<'_> {
     }
 }
 
-impl<'a, 'b> Consume<'a, 'b> for Binding<'a> {
-    fn consume(tokens: &'b [Token<'a>]) -> Result<(&'b [Token<'a>], Self)> {
+impl<'a> Consume<'a> for Binding<'a> {
+    fn consume(tokens: Parser<'a>) -> Result<(Parser<'a>, Self)> {
         let (mut tokens, arg) = Argument::consume(tokens).wrap_err("parsing binding")?;
         tokens
             .check_skip(Token::COLON)
@@ -697,8 +787,8 @@ impl std::fmt::Display for Argument<'_> {
     }
 }
 
-impl<'a, 'b> Consume<'a, 'b> for Argument<'a> {
-    fn consume(tokens: &'b [Token<'a>]) -> Result<(&'b [Token<'a>], Self)> {
+impl<'a> Consume<'a> for Argument<'a> {
+    fn consume(tokens: Parser<'a>) -> Result<(Parser<'a>, Self)> {
         let (mut tokens, s) = Variable::consume(tokens).wrap_err("parsing argument")?;
 
         if tokens.check_skip(Token::LSQUARE).is_ok() {
@@ -715,16 +805,29 @@ impl<'a, 'b> Consume<'a, 'b> for Argument<'a> {
     }
 }
 
-pub fn parse<'a>(mut tokens: &[Token<'a>]) -> Result<Vec<Cmd<'a>>> {
+pub fn parse<'a>(
+    tokens: &'a [Token<'a>],
+    input_by_token: &'a [&'a str],
+    source: &'a str,
+) -> Result<Vec<Cmd<'a>>> {
     let mut cmds = vec![];
 
+    let mut tokens = Parser {
+        original_tokens: tokens,
+        current_position: Cell::new(0),
+        input_by_token,
+        successfully_parsed: Rc::new(Cell::new(0)),
+        source,
+    };
+
     while !tokens.is_empty() {
-        let cmd = Cmd::consume(tokens);
+        let cmd = Cmd::consume(tokens.clone());
 
         match cmd {
             Ok((moved_tokens, cmd)) => {
                 debug_assert_ne!(moved_tokens, tokens);
                 tokens = moved_tokens;
+                tokens.successfully_parsed.set(0);
                 cmds.push(cmd);
             }
             Err(e) => {
@@ -733,9 +836,11 @@ pub fn parse<'a>(mut tokens: &[Token<'a>]) -> Result<Vec<Cmd<'a>>> {
                     continue;
                 }
 
-                if let [Token::END_OF_FILE] = tokens {
+                if let Some(Token::END_OF_FILE) = tokens.first() {
                     break;
                 }
+
+                tokens.print_error();
 
                 #[cfg(test)]
                 #[cfg(not(feature = "homework"))]
@@ -761,7 +866,9 @@ fn test_parse_correct() {
     let regex = Regex::new(r"\n\s+").unwrap();
 
     let tester = |file: &str, solution_file: &str| {
-        let parsed = match parse(&crate::lex::lex(file).expect("Lexing should work")) {
+        let (tokens, input_by_token) = crate::lex::lex(file).expect("Lexing should work");
+
+        let parsed = match parse(&tokens, &input_by_token, file) {
             Ok(parsed) => parsed,
             Err(e) => {
                 panic!("Compilation failed {e}");
@@ -792,11 +899,11 @@ fn test_parse_correct() {
 #[test]
 fn test_parse_fails() {
     let tester = |file: Option<&str>| {
-        let Ok(tokens) = crate::lex::lex(file.unwrap()) else {
+        let Ok((tokens, input_by_tokens)) = crate::lex::lex(file.unwrap()) else {
             return;
         };
 
-        match parse(&tokens) {
+        match parse(&tokens, &input_by_tokens, file.unwrap()) {
             Ok(parsed) => {
                 println!("{:?}", parsed);
                 panic!("expected parse to fail");
