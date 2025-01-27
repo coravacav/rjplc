@@ -23,6 +23,7 @@ struct Cli {
 }
 
 fn main() {
+    #[allow(unused_mut)]
     let Cli {
         path,
         mut lex,

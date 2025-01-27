@@ -16,4 +16,4 @@ pretty_assertions = "1.4.1"
 
 [features]
 homework = []
-default = ["homework"]
+default = []

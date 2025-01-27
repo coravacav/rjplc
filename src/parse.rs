@@ -22,7 +22,7 @@ trait PrintJoined {
     fn print_joined(&self, sep: &str) -> Result<String>;
 }
 
-impl<T: std::fmt::Display> PrintJoined for [T] {
+impl<T: std::fmt::Display + std::fmt::Debug> PrintJoined for [T] {
     fn print_joined(&self, sep: &str) -> Result<String> {
         use std::fmt::Write;
         let mut s = String::new();
@@ -53,13 +53,13 @@ impl<'a> Parser<'a> {
             .set(self.successfully_parsed.get() + 1);
     }
 
-    fn next_and_skip(&mut self) -> Result<Token<'a>> {
+    fn next_and_skip(&self) -> Result<Token<'a>> {
         let next = self.first();
         self.skip_one();
         next.ok_or_eyre("Unexpected end of tokens")
     }
 
-    fn check_skip(&mut self, token: Token<'a>) -> Result<()> {
+    fn check_skip(&self, token: Token<'a>) -> Result<()> {
         if self.check_one(token) {
             self.skip_one();
             Ok(())
@@ -126,20 +126,23 @@ impl<'a> Parser<'a> {
         };
 
         let semi_valid = semi_valid
-            .lines()
+            .split('\n')
             .map(|line| line.green().dimmed().to_string())
             .join("\n");
 
-        let error = error.lines().map(|line| line.red().to_string()).join("\n");
+        let error = error
+            .split('\n')
+            .map(|line| line.red().to_string())
+            .join("\n");
 
         let source_post = source_post
-            .lines()
+            .split('\n')
             .take(2)
             .map(|line| line.dimmed().to_string())
             .join("\n");
 
         let output = format!("{}{}{}{}", source_pre, semi_valid, error, source_post)
-            .lines()
+            .split('\n')
             .zip(newlines)
             .fold(String::new(), |acc, (line, newline_count)| {
                 format!(
@@ -204,6 +207,28 @@ impl<'a> Consume<'a> for LiteralString<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct Field<'a>(Variable<'a>, Type<'a>);
+
+impl std::fmt::Display for Field<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} {}", self.0, self.1)
+    }
+}
+
+impl<'a> Consume<'a> for Field<'a> {
+    fn consume(tokens: Parser<'a>) -> Result<(Parser<'a>, Self)> {
+        let (tokens, s) = Variable::consume(tokens).wrap_err("parsing field")?;
+        tokens.check_skip(Token::COLON).wrap_err("parsing field")?;
+        let (tokens, ty) = Type::consume(tokens).wrap_err("parsing field")?;
+        Ok((tokens, Self(s, ty)))
+    }
+
+    fn get_name(&self) -> &'static str {
+        "field"
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum Cmd<'a> {
     Read(LiteralString<'a>, LValue<'a>),
     Write(Expr<'a>, LiteralString<'a>),
@@ -214,16 +239,17 @@ pub enum Cmd<'a> {
     Time(Box<Cmd<'a>>),
     Fn(Variable<'a>, Vec<Binding<'a>>, Type<'a>, Vec<Statement<'a>>),
     Type(Variable<'a>, Type<'a>),
+    Struct(Variable<'a>, Vec<Field<'a>>),
 }
 
 impl<'a> Consume<'a> for Cmd<'a> {
-    fn consume(mut tokens: Parser<'a>) -> Result<(Parser<'a>, Self)> {
+    fn consume(tokens: Parser<'a>) -> Result<(Parser<'a>, Self)> {
         match tokens.next_and_skip()? {
             Token::READ => {
                 tokens.check_skip(Token::IMAGE).wrap_err("parsing read command")?;
-                let (mut tokens, s) = LiteralString::consume(tokens).wrap_err("parsing read command")?;
+                let (tokens, s) = LiteralString::consume(tokens).wrap_err("parsing read command")?;
                 tokens.check_skip(Token::TO).wrap_err("parsing read command")?;
-                let (mut tokens, lvalue) = LValue::consume(tokens).wrap_err("parsing read command")?;
+                let (tokens, lvalue) = LValue::consume(tokens).wrap_err("parsing read command")?;
                 tokens.check_skip(Token::NEWLINE).wrap_err("parsing read command")?;
                 Ok((tokens, Self::Read(s, lvalue)))
             }
@@ -232,56 +258,66 @@ impl<'a> Consume<'a> for Cmd<'a> {
                 Ok((tokens, Self::Time(Box::new(cmd))))
             }
             Token::LET => {
-                let (mut tokens, lvalue) = LValue::consume(tokens).wrap_err("parsing let command")?;
+                let (tokens, lvalue) = LValue::consume(tokens).wrap_err("parsing let command")?;
                 tokens.check_skip(Token::EQUALS).wrap_err("parsing let command")?;
-                let (mut tokens, expr) = Expr::consume(tokens).wrap_err("parsing let command")?;
+                let (tokens, expr) = Expr::consume(tokens).wrap_err("parsing let command")?;
                 tokens.check_skip(Token::NEWLINE).wrap_err("parsing let command")?;
                 Ok((tokens, Self::Let(lvalue, expr)))
             }
             Token::ASSERT => {
-                let (mut tokens, expr) = Expr::consume(tokens).wrap_err("parsing assert command")?;
+                let (tokens, expr) = Expr::consume(tokens).wrap_err("parsing assert command")?;
                 tokens.check_skip(Token::COMMA).wrap_err("parsing assert command")?;
-                let (mut tokens, s) = LiteralString::consume(tokens).wrap_err("parsing assert command")?;
+                let (tokens, s) = LiteralString::consume(tokens).wrap_err("parsing assert command")?;
                 tokens.check_skip(Token::NEWLINE).wrap_err("parsing assert command")?;
                 Ok((tokens, Self::Assert(expr, s)))
             }
             Token::SHOW => {
-                let (mut tokens, expr) = Expr::consume(tokens).wrap_err("parsing show command")?;
+                let (tokens, expr) = Expr::consume(tokens).wrap_err("parsing show command")?;
                 tokens.check_skip(Token::NEWLINE).wrap_err("parsing show command")?;
                 Ok((tokens, Self::Show(expr)))
             }
             Token::WRITE => {
                 tokens.check_skip(Token::IMAGE).wrap_err("parsing write command")?;
-                let (mut tokens, expr) = Expr::consume(tokens).wrap_err("parsing write command")?;
+                let (tokens, expr) = Expr::consume(tokens).wrap_err("parsing write command")?;
                 tokens.check_skip(Token::TO).wrap_err("parsing write command")?;
-                let (mut tokens, s) = LiteralString::consume(tokens).wrap_err("parsing write command")?;
+                let (tokens, s) = LiteralString::consume(tokens).wrap_err("parsing write command")?;
                 tokens.check_skip(Token::NEWLINE).wrap_err("parsing write command")?;
                 Ok((tokens, Self::Write(expr, s)))
             }
             Token::PRINT => {
-                let (mut tokens, s) = LiteralString::consume(tokens).wrap_err("parsing print command")?;
+                let (tokens, s) = LiteralString::consume(tokens).wrap_err("parsing print command")?;
                 tokens.check_skip(Token::NEWLINE).wrap_err("parsing print command")?;
                 Ok((tokens, Self::Print(s)))
             }
             Token::FN => {
-                let (mut tokens, v) = Variable::consume(tokens).wrap_err("parsing fn command")?;
+                let (tokens, v) = Variable::consume(tokens).wrap_err("parsing fn command")?;
                 tokens.check_skip(Token::LPAREN).wrap_err("parsing fn command")?;
-                let (mut tokens, bindings) = consume_list(tokens, Token::RPAREN, Token::COMMA).wrap_err("parsing fn command")?;
+                let (tokens, bindings) = consume_list(tokens, Token::RPAREN, Token::COMMA, false).wrap_err("parsing fn command")?;
                 tokens.check_skip(Token::COLON).wrap_err("parsing fn command")?;
-                let (mut tokens, ty) = Type::consume(tokens).wrap_err("parsing fn command")?;
+                let (tokens, ty) = Type::consume(tokens).wrap_err("parsing fn command")?;
                 tokens.check_skip(Token::LCURLY).wrap_err("parsing fn command")?;
                 tokens.check_skip(Token::NEWLINE).wrap_err("parsing fn command")?;
-                let (tokens, statements) = consume_list(tokens, Token::RCURLY, Token::NEWLINE).wrap_err("parsing write command")?;
+                let (tokens, statements) = consume_list(tokens, Token::RCURLY, Token::NEWLINE, true).wrap_err("parsing fn command")?;
+                dbg!(&tokens.first());
                 Ok((tokens, Self::Fn(v, bindings, ty, statements)))
             }
             Token::TYPE => {
-                let (mut tokens, v) = Variable::consume(tokens).wrap_err("parsing type command")?;
+                let (tokens, v) = Variable::consume(tokens).wrap_err("parsing type command")?;
                 tokens.check_skip(Token::EQUALS).wrap_err("parsing type command")?;
-                let (mut tokens, ty) = Type::consume(tokens).wrap_err("parsing type command")?;
+                let (tokens, ty) = Type::consume(tokens).wrap_err("parsing type command")?;
                 tokens.check_skip(Token::NEWLINE).wrap_err("parsing type command")?;
                 Ok((tokens, Self::Type(v, ty)))
             }
-            t => Err(eyre!("expected a command keyword (ASSERT | RETURN | LET | ASSERT | PRINT | SHOW | TIME | FN | TYPE), found {:?}", t)),
+            Token::STRUCT => {
+                let (tokens, v) = Variable::consume(tokens).wrap_err("parsing struct command")?;
+                tokens.check_skip(Token::LCURLY).wrap_err("parsing struct command")?;
+                tokens
+                    .check_skip(Token::NEWLINE)
+                    .wrap_err("parsing struct command")?;
+                let (tokens, fields) = consume_list(tokens, Token::RCURLY, Token::NEWLINE, false).wrap_err("parsing struct command")?;
+                Ok((tokens, Self::Struct(v, fields)))
+            }
+            t => Err(eyre!("expected a command keyword (ASSERT | RETURN | LET | ASSERT | PRINT | SHOW | TIME | FN | TYPE | STRUCT), found {:?}", t)),
         }
     }
 
@@ -303,13 +339,21 @@ impl std::fmt::Display for Cmd<'_> {
             Cmd::Fn(name, bindings, ty, statements) => {
                 write!(
                     f,
-                    "(FnCmd {name} ({}) {ty} {})",
+                    "(FnCmd {name} (({})) {ty} {})",
                     bindings.print_joined(" ").map_err(|_| std::fmt::Error)?,
                     statements.print_joined(" ").map_err(|_| std::fmt::Error)?
                 )
             }
             Cmd::Type(name, ty) => {
                 write!(f, "(TypeCmd {name} {ty})")
+            }
+            Cmd::Struct(name, fields) => {
+                write!(
+                    f,
+                    "(StructCmd {name}{}{})",
+                    if fields.is_empty() { "" } else { " " },
+                    fields.print_joined(" ").map_err(|_| std::fmt::Error)?
+                )
             }
         }
     }
@@ -337,38 +381,26 @@ impl<'a> Consume<'a> for Statement<'a> {
         match tokens.first() {
             Some(Token::ASSERT) => {
                 tokens.skip_one();
-                let (mut tokens, expr) =
-                    Expr::consume(tokens).wrap_err("parsing assert statement")?;
+                let (tokens, expr) = Expr::consume(tokens).wrap_err("parsing assert statement")?;
                 tokens
                     .check_skip(Token::COMMA)
                     .wrap_err("parsing assert statement")?;
-                let (mut tokens, msg) =
+                let (tokens, msg) =
                     LiteralString::consume(tokens).wrap_err("parsing assert statement")?;
-                tokens
-                    .check_skip(Token::NEWLINE)
-                    .wrap_err("parsing assert statement")?;
                 Ok((tokens, Self::Assert(expr, msg)))
             }
             Some(Token::RETURN) => {
                 tokens.skip_one();
-                let (mut tokens, expr) =
-                    Expr::consume(tokens).wrap_err("parsing return statement")?;
-                tokens
-                    .check_skip(Token::NEWLINE)
-                    .wrap_err("parsing return statement")?;
+                let (tokens, expr) = Expr::consume(tokens).wrap_err("parsing return statement")?;
                 Ok((tokens, Self::Return(expr)))
             }
             Some(Token::LET) => {
                 tokens.skip_one();
-                let (mut tokens, lvalue) =
-                    LValue::consume(tokens).wrap_err("parsing let statement")?;
+                let (tokens, lvalue) = LValue::consume(tokens).wrap_err("parsing let statement")?;
                 tokens
                     .check_skip(Token::EQUALS)
                     .wrap_err("parsing let statement")?;
-                let (mut tokens, expr) = Expr::consume(tokens).wrap_err("parsing let statement")?;
-                tokens
-                    .check_skip(Token::NEWLINE)
-                    .wrap_err("parsing let statement")?;
+                let (tokens, expr) = Expr::consume(tokens).wrap_err("parsing let statement")?;
                 Ok((tokens, Self::Let(lvalue, expr)))
             }
             Some(t) => Err(eyre!(
@@ -391,13 +423,17 @@ pub enum Expr<'a> {
     Float(f64),
     True,
     False,
+    Void,
     Variable(&'a str),
     Array(Vec<Expr<'a>>),
     Tuple(Vec<Expr<'a>>),
     ArrayIndex(Box<Expr<'a>>, Vec<Expr<'a>>),
+    #[allow(dead_code)]
     Binop(Box<Expr<'a>>, Op, Box<Expr<'a>>),
     Call(Variable<'a>, Vec<Expr<'a>>),
     TupleIndex(Box<Expr<'a>>, Vec<Expr<'a>>),
+    StructLiteral(Variable<'a>, Vec<Expr<'a>>),
+    Dot(Box<Expr<'a>>, Variable<'a>),
 }
 
 impl std::fmt::Display for Expr<'_> {
@@ -407,58 +443,69 @@ impl std::fmt::Display for Expr<'_> {
             Expr::Float(fl) => write!(f, "(FloatExpr {:.0})", fl.trunc()),
             Expr::True => write!(f, "(TrueExpr)"),
             Expr::False => write!(f, "(FalseExpr)"),
+            Expr::Void => write!(f, "(VoidExpr)"),
             Expr::Variable(s) => write!(f, "(VarExpr {s})"),
             Expr::Array(exprs) => {
-                write!(f, "(ArrayLiteralExpr")?;
-                for expr in exprs.iter() {
-                    write!(f, " {expr}")?;
-                }
-                write!(f, ")")
+                write!(
+                    f,
+                    "(ArrayLiteralExpr{}{})",
+                    if exprs.is_empty() { "" } else { " " },
+                    exprs.print_joined(" ").map_err(|_| std::fmt::Error)?
+                )
             }
             Expr::Tuple(exprs) => {
-                write!(f, "(TupleLiteralExpr")?;
-                for expr in exprs.iter() {
-                    write!(f, " {expr}")?;
-                }
-                write!(f, ")")
+                write!(
+                    f,
+                    "(TupleLiteralExpr {})",
+                    exprs.print_joined(" ").map_err(|_| std::fmt::Error)?
+                )
             }
             Expr::ArrayIndex(s, exprs) => {
-                write!(f, "(ArrayIndexExpr")?;
-                write!(f, " {s}")?;
-                for expr in exprs.iter() {
-                    write!(f, " {expr}")?;
-                }
-                write!(f, ")")
+                write!(
+                    f,
+                    "(ArrayIndexExpr {s}{}{})",
+                    if exprs.is_empty() { "" } else { " " },
+                    exprs.print_joined(" ").map_err(|_| std::fmt::Error)?
+                )
             }
             Expr::TupleIndex(s, exprs) => {
-                write!(f, "(TupleIndexExpr")?;
-                write!(f, " {s}")?;
-                for expr in exprs.iter() {
-                    match expr {
-                        Expr::Int(i) => write!(f, " {i}")?,
-                        _ => write!(f, " {expr}")?,
-                    }
-                }
-                write!(f, ")")
+                write!(
+                    f,
+                    "(TupleIndexExpr {s} {})",
+                    exprs.print_joined(" ").map_err(|_| std::fmt::Error)?
+                )
             }
             Expr::Binop(expr, op, expr2) => {
                 write!(f, "(BinopExpr {expr} {op} {expr2})")
             }
             Expr::Call(expr, exprs) => {
-                write!(f, "(CallExpr {expr}")?;
-                for expr in exprs.iter() {
-                    write!(f, " {expr}")?;
-                }
-                write!(f, ")")
+                write!(
+                    f,
+                    "(CallExpr {expr}{}{})",
+                    if exprs.is_empty() { "" } else { " " },
+                    exprs.print_joined(" ").map_err(|_| std::fmt::Error)?
+                )
+            }
+            Expr::StructLiteral(s, exprs) => {
+                write!(
+                    f,
+                    "(StructLiteralExpr {s}{}{})",
+                    if exprs.is_empty() { "" } else { " " },
+                    exprs.print_joined(" ").map_err(|_| std::fmt::Error)?
+                )
+            }
+            Expr::Dot(expr, s) => {
+                write!(f, "(DotExpr {expr} {s})")
             }
         }
     }
 }
 
-fn consume_list<'a, 'b, T: Consume<'a>>(
+fn consume_list<'a, 'b, T: Consume<'a> + std::fmt::Debug>(
     mut tokens: Parser<'a>,
     end_token: Token<'a>,
     delimeter: Token<'a>,
+    delimeter_terminated: bool,
 ) -> Result<(Parser<'a>, Vec<T>)> {
     let mut list = vec![];
     loop {
@@ -473,9 +520,15 @@ fn consume_list<'a, 'b, T: Consume<'a>>(
 
         tokens = rem_tokens;
         list.push(t);
-        if tokens.check_skip(delimeter).is_err() && tokens.check_skip(end_token).is_ok() {
-            break;
-        };
+
+        match tokens.first() {
+            Some(t) if t == delimeter => tokens.skip_one(),
+            Some(t) if !delimeter_terminated && t == end_token => break tokens.skip_one(),
+            Some(t) if delimeter_terminated => bail!("expected {delimeter:?}, found {t:?}"),
+            None if delimeter_terminated => bail!("expected {delimeter:?}, found end of tokens"),
+            Some(t) => bail!("expected {delimeter:?} or {end_token:?}, found {t:?}"),
+            None => bail!("expected {delimeter:?} or {end_token:?}, found end of tokens"),
+        }
     }
 
     Ok((tokens, list))
@@ -503,6 +556,10 @@ impl<'a> Consume<'a> for Expr<'a> {
                     ),
                 )
             }
+            Some(Token::VOID) => {
+                tokens.skip_one();
+                (tokens, Expr::Void)
+            }
             Some(Token::TRUE) => {
                 tokens.skip_one();
                 (tokens, Expr::True)
@@ -518,20 +575,19 @@ impl<'a> Consume<'a> for Expr<'a> {
             Some(Token::LSQUARE) => {
                 tokens.skip_one();
 
-                let (tokens, exprs) = consume_list(tokens, Token::RSQUARE, Token::COMMA).wrap_err("parsing array literal expr")?;
+                let (tokens, exprs) = consume_list(tokens, Token::RSQUARE, Token::COMMA, false).wrap_err("parsing array literal expr")?;
 
-                // intentionally early
-                return Ok((tokens, Expr::Array(exprs)));
+                (tokens, Expr::Array(exprs))
             }
             Some(Token::LPAREN) => {
                 tokens.skip_one();
-                let (mut tokens, expr) = Expr::consume(tokens).wrap_err("parsing parenthesis expr")?;
+                let (tokens, expr) = Expr::consume(tokens).wrap_err("parsing parenthesis expr")?;
                 tokens.check_skip(Token::RPAREN).wrap_err("parsing parenthesis expr")?;
                 (tokens, expr)
             }
             Some(Token::LCURLY) => {
                 tokens.skip_one();
-                let (tokens, exprs) = consume_list(tokens, Token::RCURLY, Token::COMMA).wrap_err("parsing tuple literal expr")?;
+                let (tokens, exprs) = consume_list(tokens, Token::RCURLY, Token::COMMA, false).wrap_err("parsing tuple literal expr")?;
                 (tokens, Expr::Tuple(exprs))
             }
             Some(t) => bail!(
@@ -546,39 +602,58 @@ impl<'a> Consume<'a> for Expr<'a> {
             match (tokens.first(), &expr) {
                 (Some(Token::LSQUARE), _) => {
                     tokens.skip_one();
-                    let (rem_tokens, exprs) = consume_list(tokens, Token::RSQUARE, Token::COMMA)
-                        .wrap_err("parsing array index expr")?;
+                    let (rem_tokens, exprs) =
+                        consume_list(tokens, Token::RSQUARE, Token::COMMA, false)
+                            .wrap_err("parsing array index expr")?;
                     tokens = rem_tokens;
                     expr = Expr::ArrayIndex(Box::new(expr), exprs)
                 }
                 (Some(Token::LPAREN), Expr::Variable(s)) => {
                     let s = Variable(s);
                     tokens.skip_one();
-                    let (rem_tokens, exprs) = consume_list(tokens, Token::RPAREN, Token::COMMA)
-                        .wrap_err("parsing call expr")?;
+                    let (rem_tokens, exprs) =
+                        consume_list(tokens, Token::RPAREN, Token::COMMA, false)
+                            .wrap_err("parsing call expr")?;
                     tokens = rem_tokens;
                     expr = Expr::Call(s, exprs)
                 }
+                (Some(Token::LCURLY), Expr::Variable(s)) => {
+                    let s = Variable(s);
+                    tokens.skip_one();
+                    let (rem_tokens, exprs) =
+                        consume_list(tokens, Token::RCURLY, Token::COMMA, false)
+                            .wrap_err("parsing struct literal expr")?;
+                    tokens = rem_tokens;
+                    expr = Expr::StructLiteral(s, exprs)
+                }
                 (Some(Token::LCURLY), _) => {
                     tokens.skip_one();
-                    let (rem_tokens, exprs) = consume_list(tokens, Token::RCURLY, Token::COMMA)
-                        .wrap_err("parsing tuple index expr")?;
+                    let (rem_tokens, exprs) =
+                        consume_list(tokens, Token::RCURLY, Token::COMMA, false)
+                            .wrap_err("parsing tuple index expr")?;
                     tokens = rem_tokens;
                     expr = Expr::TupleIndex(Box::new(expr), exprs)
+                }
+                (Some(Token::DOT), _) => {
+                    tokens.skip_one();
+                    let (rem_tokens, var) =
+                        Variable::consume(tokens).wrap_err("parsing dot expr")?;
+                    tokens = rem_tokens;
+                    expr = Expr::Dot(Box::new(expr), var)
                 }
                 _ => break (tokens, expr),
             };
         };
 
-        let (tokens, expr) = match tokens.first() {
-            // ? Only Eq right now to pass that bad test
-            Some(Token::OP(c @ Op::Eq)) => {
-                tokens.skip_one();
-                let (tokens, expr2) = Expr::consume(tokens).wrap_err("parsing binary op expr")?;
-                (tokens, Expr::Binop(Box::new(expr), c, Box::new(expr2)))
-            }
-            _ => (tokens, expr),
-        };
+        // let (tokens, expr) = match tokens.first() {
+        //     // // ? Only Eq right now to pass that bad test
+        //     // Some(Token::OP(c @ Op::Eq)) => {
+        //     //     tokens.skip_one();
+        //     //     let (tokens, expr2) = Expr::consume(tokens).wrap_err("parsing binary op expr")?;
+        //     //     (tokens, Expr::Binop(Box::new(expr), c, Box::new(expr2)))
+        //     // }
+        //     _ => (tokens, expr),
+        // };
 
         Ok((tokens, expr))
     }
@@ -591,7 +666,7 @@ impl<'a> Consume<'a> for Expr<'a> {
 #[derive(Debug, Clone, PartialEq)]
 pub enum LValue<'a> {
     Var(Variable<'a>),
-    Arg(Argument<'a>),
+    Array(Variable<'a>, Vec<Variable<'a>>),
     Tuple(Vec<LValue<'a>>),
 }
 
@@ -599,13 +674,19 @@ impl std::fmt::Display for LValue<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             LValue::Var(s) => write!(f, "(VarLValue {s})"),
-            LValue::Arg(s) => write!(f, "(ArgLValue {s})"),
+            LValue::Array(s, args) => {
+                write!(
+                    f,
+                    "(ArrayLValue {s} {})",
+                    args.print_joined(" ").map_err(|_| std::fmt::Error)?
+                )
+            }
             LValue::Tuple(lvs) => {
-                write!(f, "(TupleLValue")?;
-                for lv in lvs.iter() {
-                    write!(f, " {lv}")?;
-                }
-                write!(f, ")")
+                write!(
+                    f,
+                    "(TupleLValue {})",
+                    lvs.print_joined(" ").map_err(|_| std::fmt::Error)?
+                )
             }
         }
     }
@@ -613,28 +694,32 @@ impl std::fmt::Display for LValue<'_> {
 
 impl<'a> Consume<'a> for LValue<'a> {
     fn consume(tokens: Parser<'a>) -> Result<(Parser<'a>, Self)> {
-        if let Ok((tokens, arg)) = Argument::consume(tokens.clone()) {
-            return match arg {
-                // This is really weird hw3 special casing.
-                Argument::Var(s) => Ok((tokens, LValue::Var(s))),
-                _ => Ok((tokens, LValue::Arg(arg))),
-            };
-        }
-
-        match tokens.first() {
+        let (tokens, lv) = match tokens.first() {
             Some(Token::VARIABLE(s)) => {
                 tokens.skip_one();
-                Ok((tokens, LValue::Var(Variable(s))))
+                (tokens, LValue::Var(Variable(s)))
             }
             Some(Token::LCURLY) => {
                 tokens.skip_one();
-                let (tokens, lvs) = consume_list(tokens, Token::RCURLY, Token::COMMA)
+                let (tokens, lvs) = consume_list(tokens, Token::RCURLY, Token::COMMA, false)
                     .wrap_err("parsing tuple lvalue")?;
-                Ok((tokens, LValue::Tuple(lvs)))
+                (tokens, LValue::Tuple(lvs))
             }
             Some(t) => bail!("expected start of lvalue (VARIABLE | LCURLY), found {t:?}"),
             None => bail!("expected start of lvalue (VARIABLE | LCURLY), found end of tokens"),
-        }
+        };
+
+        let (tokens, lv) = match (tokens.first(), &lv) {
+            (Some(Token::LSQUARE), &LValue::Var(s)) => {
+                tokens.skip_one();
+                let (tokens, args) = consume_list(tokens, Token::RSQUARE, Token::COMMA, false)
+                    .wrap_err("parsing array lvalue")?;
+                (tokens, LValue::Array(s, args))
+            }
+            _ => (tokens, lv),
+        };
+
+        Ok((tokens, lv))
     }
 
     fn get_name(&self) -> &'static str {
@@ -644,24 +729,30 @@ impl<'a> Consume<'a> for LValue<'a> {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Type<'a> {
-    Var(&'a str),
+    Struct(&'a str),
     Array(Box<Type<'a>>, u8),
     Float,
+    Int,
+    Bool,
+    Void,
     Tuple(Vec<Type<'a>>),
 }
 
 impl std::fmt::Display for Type<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Type::Var(s) => write!(f, "(VarType {s})"),
+            Type::Struct(s) => write!(f, "(StructType {s})"),
             Type::Array(s, i) => write!(f, "(ArrayType {s} {i})"),
             Type::Float => write!(f, "(FloatType)"),
+            Type::Int => write!(f, "(IntType)"),
+            Type::Bool => write!(f, "(BoolType)"),
+            Type::Void => write!(f, "(VoidType)"),
             Type::Tuple(tys) => {
-                write!(f, "(TupleType")?;
-                for ty in tys.iter() {
-                    write!(f, " {ty}")?;
-                }
-                write!(f, ")")
+                write!(
+                    f,
+                    "(TupleType {})",
+                    tys.print_joined(" ").map_err(|_| std::fmt::Error)?
+                )
             }
         }
     }
@@ -669,10 +760,22 @@ impl std::fmt::Display for Type<'_> {
 
 impl<'a> Consume<'a> for Type<'a> {
     fn consume(tokens: Parser<'a>) -> Result<(Parser<'a>, Self)> {
-        let (mut tokens, ty) = match tokens.first() {
+        let (tokens, mut ty) = match tokens.first() {
             Some(Token::VARIABLE(s)) => {
                 tokens.skip_one();
-                (tokens, Type::Var(s))
+                (tokens, Type::Struct(s))
+            }
+            Some(Token::INT) => {
+                tokens.skip_one();
+                (tokens, Type::Int)
+            }
+            Some(Token::BOOL) => {
+                tokens.skip_one();
+                (tokens, Type::Bool)
+            }
+            Some(Token::VOID) => {
+                tokens.skip_one();
+                (tokens, Type::Void)
             }
             Some(Token::FLOAT) => {
                 tokens.skip_one();
@@ -680,7 +783,7 @@ impl<'a> Consume<'a> for Type<'a> {
             }
             Some(Token::LCURLY) => {
                 tokens.skip_one();
-                let (tokens, tys) = consume_list(tokens, Token::RCURLY, Token::COMMA)
+                let (tokens, tys) = consume_list(tokens, Token::RCURLY, Token::COMMA, false)
                     .wrap_err("parsing tuple type")?;
                 (tokens, Type::Tuple(tys))
             }
@@ -690,21 +793,29 @@ impl<'a> Consume<'a> for Type<'a> {
             }
         };
 
-        let (tokens, ty) = if tokens.check_skip(Token::LSQUARE).is_ok() {
-            let mut depth: u8 = 1;
-            loop {
-                match tokens.next_and_skip().wrap_err("parsing array type")? {
-                    Token::RSQUARE => {
-                        break (tokens, Self::Array(Box::new(ty), depth));
+        let (tokens, ty) = loop {
+            match (tokens.first(), &ty) {
+                (Some(Token::LSQUARE), _) => {
+                    tokens.skip_one();
+
+                    let mut depth: u8 = 1;
+
+                    loop {
+                        match tokens.next_and_skip().wrap_err("parsing array type")? {
+                            Token::RSQUARE => {
+                                break;
+                            }
+                            Token::COMMA => {
+                                depth += 1;
+                            }
+                            t => bail!("expected RSQUARE or COMMA, found {t:?}"),
+                        }
                     }
-                    Token::COMMA => {
-                        depth += 1;
-                    }
-                    t => bail!("expected RSQUARE or COMMA, found {t:?}"),
+
+                    ty = Self::Array(Box::new(ty), depth);
                 }
-            }
-        } else {
-            (tokens, ty)
+                _ => break (tokens, ty),
+            };
         };
 
         Ok((tokens, ty))
@@ -717,68 +828,29 @@ impl<'a> Consume<'a> for Type<'a> {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Binding<'a> {
-    Var(Argument<'a>, Type<'a>),
+    Var(LValue<'a>, Type<'a>),
 }
 
 impl std::fmt::Display for Binding<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Binding::Var(s, ty) => write!(f, "(VarBinding {s} {ty})"),
+            Binding::Var(s, ty) => write!(f, "{s} {ty}"),
         }
     }
 }
 
 impl<'a> Consume<'a> for Binding<'a> {
     fn consume(tokens: Parser<'a>) -> Result<(Parser<'a>, Self)> {
-        let (mut tokens, arg) = Argument::consume(tokens).wrap_err("parsing binding")?;
+        let (tokens, lv) = LValue::consume(tokens).wrap_err("parsing binding")?;
         tokens
             .check_skip(Token::COLON)
             .wrap_err("parsing binding")?;
         let (tokens, ty) = Type::consume(tokens).wrap_err("parsing binding")?;
-        Ok((tokens, Self::Var(arg, ty)))
+        Ok((tokens, Self::Var(lv, ty)))
     }
 
     fn get_name(&self) -> &'static str {
         "binding"
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum Argument<'a> {
-    Var(Variable<'a>),
-    Array(Variable<'a>, Vec<Variable<'a>>),
-}
-
-impl std::fmt::Display for Argument<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Argument::Var(s) => write!(f, "(VarArgument {s})"),
-            Argument::Array(s, args) => {
-                write!(f, "(ArrayArgument {s}")?;
-                for arg in args.iter() {
-                    write!(f, " {arg}")?;
-                }
-                write!(f, ")")
-            }
-        }
-    }
-}
-
-impl<'a> Consume<'a> for Argument<'a> {
-    fn consume(tokens: Parser<'a>) -> Result<(Parser<'a>, Self)> {
-        let (mut tokens, s) = Variable::consume(tokens).wrap_err("parsing argument")?;
-
-        if tokens.check_skip(Token::LSQUARE).is_ok() {
-            let (tokens, args) = consume_list(tokens, Token::RSQUARE, Token::COMMA)
-                .wrap_err("parsing array argument")?;
-            Ok((tokens, Self::Array(s, args)))
-        } else {
-            Ok((tokens, Self::Var(s)))
-        }
-    }
-
-    fn get_name(&self) -> &'static str {
-        "argument"
     }
 }
 
@@ -820,14 +892,7 @@ pub fn parse<'a>(
                 tokens.print_error();
 
                 #[cfg(test)]
-                #[cfg(not(feature = "homework"))]
-                {
-                    for token in tokens {
-                        println!("{token}");
-                    }
-
-                    println!("{e}");
-                }
+                println!("{e:?}");
 
                 return Err(e);
             }
@@ -870,7 +935,8 @@ fn test_parse_correct() {
 
     test_correct("grader/hw3/ok", tester);
     test_correct("grader/hw3/ok-fuzzer", tester);
-    // test_correct("grader/hw4/ok", tester);
+    test_correct("grader/hw4/ok", tester);
+    test_correct("grader/hw4/ok-fuzzer", tester);
 }
 
 #[test]
@@ -894,4 +960,7 @@ fn test_parse_fails() {
     test_solos("grader/hw3/fail-fuzzer1", tester);
     test_solos("grader/hw3/fail-fuzzer2", tester);
     test_solos("grader/hw3/fail-fuzzer3", tester);
+    test_solos("grader/hw4/fail-fuzzer1", tester);
+    test_solos("grader/hw4/fail-fuzzer2", tester);
+    test_solos("grader/hw4/fail-fuzzer3", tester);
 }
