@@ -1,4 +1,4 @@
-use color_eyre::eyre::{bail, eyre, Context, OptionExt, Result};
+use color_eyre::eyre::{bail, eyre, Context, Result};
 use colored::Colorize;
 use itertools::Itertools;
 
@@ -54,13 +54,14 @@ impl<'a> Parser<'a> {
         self.current_position += 1;
     }
 
-    fn next_and_skip(&mut self) -> Result<Token<'a>> {
+    fn next_and_skip(&mut self) -> Token<'a> {
         let next = self.first();
         self.skip_one();
-        next.ok_or_eyre("Unexpected end of tokens")
+        next
     }
 
     fn check_skip(&mut self, token: Token<'a>) -> Result<()> {
+        debug_assert_ne!(token, Token::END_OF_FILE);
         if self.check_one(token) {
             self.skip_one();
             Ok(())
@@ -70,14 +71,16 @@ impl<'a> Parser<'a> {
     }
 
     fn check_one(&self, token: Token<'a>) -> bool {
-        self.first() == Some(token)
+        self.first() == token
     }
 
-    fn first(&self) -> Option<Token<'a>> {
-        self.original_tokens.get(self.current_position).copied()
+    fn first(&self) -> Token<'a> {
+        debug_assert!(self.original_tokens.get(self.current_position).is_some());
+        // SAFETY: EOF is always at the end and we never check for EOF
+        unsafe { *self.original_tokens.get_unchecked(self.current_position) }
     }
 
-    fn next(&mut self) -> Option<Token<'a>> {
+    fn next(&mut self) -> Token<'a> {
         let next = self.first();
         self.skip_one();
         next
@@ -171,9 +174,8 @@ impl std::fmt::Display for Variable<'_> {
 impl<'a> Consume<'a> for Variable<'a> {
     fn consume(mut tokens: Parser<'a>) -> Result<(Parser<'a>, Self)> {
         let s = match tokens.next() {
-            Some(Token::VARIABLE(s)) => s,
-            Some(t) => bail!("expected variable, found {t:?}"),
-            None => bail!("expected a variable, unexpected end of tokens"),
+            Token::VARIABLE(s) => s,
+            t => bail!("expected variable, found {t:?}"),
         };
 
         Ok((tokens, Self(s)))
@@ -202,9 +204,8 @@ impl std::fmt::Display for LiteralString<'_> {
 impl<'a> Consume<'a> for LiteralString<'a> {
     fn consume(mut tokens: Parser<'a>) -> Result<(Parser<'a>, Self)> {
         let s = match tokens.first() {
-            Some(Token::STRING(s)) => s,
-            Some(t) => bail!("expected string, found {t:?}"),
-            None => bail!("expected a string, unexpected end of tokens"),
+            Token::STRING(s) => s,
+            t => bail!("expected string, found {t:?}"),
         };
 
         tokens.skip_one();
@@ -254,7 +255,7 @@ pub enum Cmd<'a> {
 
 impl<'a> Consume<'a> for Cmd<'a> {
     fn consume(mut tokens: Parser<'a>) -> Result<(Parser<'a>, Self)> {
-        match tokens.next_and_skip()? {
+        match tokens.next_and_skip(){
             Token::READ => {
                 tokens.check_skip(Token::IMAGE).wrap_err("parsing read command")?;
                 let (mut tokens, s) = LiteralString::consume(tokens).wrap_err("parsing read command")?;
@@ -388,7 +389,7 @@ impl std::fmt::Display for Statement<'_> {
 impl<'a> Consume<'a> for Statement<'a> {
     fn consume(mut tokens: Parser<'a>) -> Result<(Parser<'a>, Self)> {
         match tokens.first() {
-            Some(Token::ASSERT) => {
+            Token::ASSERT => {
                 tokens.skip_one();
                 let (mut tokens, expr) =
                     Expr::consume(tokens).wrap_err("parsing assert statement")?;
@@ -399,12 +400,12 @@ impl<'a> Consume<'a> for Statement<'a> {
                     LiteralString::consume(tokens).wrap_err("parsing assert statement")?;
                 Ok((tokens, Self::Assert(expr, msg)))
             }
-            Some(Token::RETURN) => {
+            Token::RETURN => {
                 tokens.skip_one();
                 let (tokens, expr) = Expr::consume(tokens).wrap_err("parsing return statement")?;
                 Ok((tokens, Self::Return(expr)))
             }
-            Some(Token::LET) => {
+            Token::LET => {
                 tokens.skip_one();
                 let (mut tokens, lvalue) =
                     LValue::consume(tokens).wrap_err("parsing let statement")?;
@@ -414,11 +415,8 @@ impl<'a> Consume<'a> for Statement<'a> {
                 let (tokens, expr) = Expr::consume(tokens).wrap_err("parsing let statement")?;
                 Ok((tokens, Self::Let(lvalue, expr)))
             }
-            Some(t) => Err(eyre!(
+            t => Err(eyre!(
                 "expected a start of statement (ASSERT | RETURN | LET), found {t:?}"
-            )),
-            None => Err(eyre!(
-                "expected a start of statement (ASSERT | RETURN | LET), found end of tokens"
             )),
         }
     }
@@ -533,12 +531,10 @@ fn consume_list<'a, 'b, T: Consume<'a> + std::fmt::Debug>(
         list.push(t);
 
         match tokens.first() {
-            Some(t) if t == delimeter => tokens.skip_one(),
-            Some(t) if !delimeter_terminated && t == end_token => break tokens.skip_one(),
-            Some(t) if delimeter_terminated => bail!("expected {delimeter:?}, found {t:?}"),
-            None if delimeter_terminated => bail!("expected {delimeter:?}, found end of tokens"),
-            Some(t) => bail!("expected {delimeter:?} or {end_token:?}, found {t:?}"),
-            None => bail!("expected {delimeter:?} or {end_token:?}, found end of tokens"),
+            t if t == delimeter => tokens.skip_one(),
+            t if !delimeter_terminated && t == end_token => break tokens.skip_one(),
+            t if delimeter_terminated => bail!("expected {delimeter:?}, found {t:?}"),
+            t => bail!("expected {delimeter:?} or {end_token:?}, found {t:?}"),
         }
     }
 
@@ -548,11 +544,11 @@ fn consume_list<'a, 'b, T: Consume<'a> + std::fmt::Debug>(
 impl<'a> Consume<'a> for Expr<'a> {
     fn consume(mut tokens: Parser<'a>) -> Result<(Parser<'a>, Expr<'a>)> {
         let (mut tokens, mut expr) = match tokens.first() {
-            Some(Token::INTVAL(s)) => {
+            Token::INTVAL(s) => {
                 tokens.skip_one();
                 (tokens, Expr::Int(s.parse().wrap_err("parsing int expr")?))
             }
-            Some(Token::FLOATVAL(s)) => {
+            Token::FLOATVAL(s) => {
                 tokens.skip_one();
                 (
                     tokens,
@@ -567,51 +563,48 @@ impl<'a> Consume<'a> for Expr<'a> {
                     ),
                 )
             }
-            Some(Token::VOID) => {
+            Token::VOID => {
                 tokens.skip_one();
                 (tokens, Expr::Void)
             }
-            Some(Token::TRUE) => {
+            Token::TRUE => {
                 tokens.skip_one();
                 (tokens, Expr::True)
             }
-            Some(Token::FALSE) => {
+            Token::FALSE => {
                 tokens.skip_one();
                 (tokens, Expr::False)
             }
-            Some(Token::VARIABLE(s)) => {
+            Token::VARIABLE(s) => {
                 tokens.skip_one();
                 (tokens, Expr::Variable(s))
             }
-            Some(Token::LSQUARE) => {
+            Token::LSQUARE => {
                 tokens.skip_one();
 
                 let (tokens, exprs) = consume_list(tokens, Token::RSQUARE, Token::COMMA, false).wrap_err("parsing array literal expr")?;
 
                 (tokens, Expr::Array(exprs))
             }
-            Some(Token::LPAREN) => {
+            Token::LPAREN => {
                 tokens.skip_one();
                 let (mut tokens, expr) = Expr::consume(tokens).wrap_err("parsing parenthesis expr")?;
                 tokens.check_skip(Token::RPAREN).wrap_err("parsing parenthesis expr")?;
                 (tokens, expr)
             }
-            Some(Token::LCURLY) => {
+            Token::LCURLY => {
                 tokens.skip_one();
                 let (tokens, exprs) = consume_list(tokens, Token::RCURLY, Token::COMMA, false).wrap_err("parsing tuple literal expr")?;
                 (tokens, Expr::Tuple(exprs))
             }
-            Some(t) => bail!(
+            t => bail!(
                 "expected start of expression (INTVAL | FLOATVAL | TRUE | FALSE | VARIABLE | LSQUARE | LPAREN | LCURLY), found {t:?}"
-            ),
-            None => bail!(
-                "expected start of expression (INTVAL | FLOATVAL | TRUE | FALSE | VARIABLE | LSQUARE | LPAREN | LCURLY), found end of tokens"
             ),
         };
 
         let (tokens, expr) = loop {
             match (tokens.first(), &expr) {
-                (Some(Token::LSQUARE), _) => {
+                (Token::LSQUARE, _) => {
                     tokens.skip_one();
                     let (rem_tokens, exprs) =
                         consume_list(tokens, Token::RSQUARE, Token::COMMA, false)
@@ -619,7 +612,7 @@ impl<'a> Consume<'a> for Expr<'a> {
                     tokens = rem_tokens;
                     expr = Expr::ArrayIndex(Box::new(expr), exprs)
                 }
-                (Some(Token::LPAREN), Expr::Variable(s)) => {
+                (Token::LPAREN, Expr::Variable(s)) => {
                     let s = Variable(s);
                     tokens.skip_one();
                     let (rem_tokens, exprs) =
@@ -628,7 +621,7 @@ impl<'a> Consume<'a> for Expr<'a> {
                     tokens = rem_tokens;
                     expr = Expr::Call(s, exprs)
                 }
-                (Some(Token::LCURLY), Expr::Variable(s)) => {
+                (Token::LCURLY, Expr::Variable(s)) => {
                     let s = Variable(s);
                     tokens.skip_one();
                     let (rem_tokens, exprs) =
@@ -637,7 +630,7 @@ impl<'a> Consume<'a> for Expr<'a> {
                     tokens = rem_tokens;
                     expr = Expr::StructLiteral(s, exprs)
                 }
-                (Some(Token::LCURLY), _) => {
+                (Token::LCURLY, _) => {
                     tokens.skip_one();
                     let (rem_tokens, exprs) =
                         consume_list(tokens, Token::RCURLY, Token::COMMA, false)
@@ -645,7 +638,7 @@ impl<'a> Consume<'a> for Expr<'a> {
                     tokens = rem_tokens;
                     expr = Expr::TupleIndex(Box::new(expr), exprs)
                 }
-                (Some(Token::DOT), _) => {
+                (Token::DOT, _) => {
                     tokens.skip_one();
                     let (rem_tokens, var) =
                         Variable::consume(tokens).wrap_err("parsing dot expr")?;
@@ -706,22 +699,21 @@ impl std::fmt::Display for LValue<'_> {
 impl<'a> Consume<'a> for LValue<'a> {
     fn consume(mut tokens: Parser<'a>) -> Result<(Parser<'a>, Self)> {
         let (mut tokens, lv) = match tokens.first() {
-            Some(Token::VARIABLE(s)) => {
+            Token::VARIABLE(s) => {
                 tokens.skip_one();
                 (tokens, LValue::Var(Variable(s)))
             }
-            Some(Token::LCURLY) => {
+            Token::LCURLY => {
                 tokens.skip_one();
                 let (tokens, lvs) = consume_list(tokens, Token::RCURLY, Token::COMMA, false)
                     .wrap_err("parsing tuple lvalue")?;
                 (tokens, LValue::Tuple(lvs))
             }
-            Some(t) => bail!("expected start of lvalue (VARIABLE | LCURLY), found {t:?}"),
-            None => bail!("expected start of lvalue (VARIABLE | LCURLY), found end of tokens"),
+            t => bail!("expected start of lvalue (VARIABLE | LCURLY), found {t:?}"),
         };
 
         let (tokens, lv) = match (tokens.first(), &lv) {
-            (Some(Token::LSQUARE), &LValue::Var(s)) => {
+            (Token::LSQUARE, &LValue::Var(s)) => {
                 tokens.skip_one();
                 let (tokens, args) = consume_list(tokens, Token::RSQUARE, Token::COMMA, false)
                     .wrap_err("parsing array lvalue")?;
@@ -787,47 +779,44 @@ impl std::fmt::Display for Type<'_> {
 impl<'a> Consume<'a> for Type<'a> {
     fn consume(mut tokens: Parser<'a>) -> Result<(Parser<'a>, Self)> {
         let (mut tokens, mut ty) = match tokens.first() {
-            Some(Token::VARIABLE(s)) => {
+            Token::VARIABLE(s) => {
                 tokens.skip_one();
                 (tokens, Type::Struct(s))
             }
-            Some(Token::INT) => {
+            Token::INT => {
                 tokens.skip_one();
                 (tokens, Type::Int)
             }
-            Some(Token::BOOL) => {
+            Token::BOOL => {
                 tokens.skip_one();
                 (tokens, Type::Bool)
             }
-            Some(Token::VOID) => {
+            Token::VOID => {
                 tokens.skip_one();
                 (tokens, Type::Void)
             }
-            Some(Token::FLOAT) => {
+            Token::FLOAT => {
                 tokens.skip_one();
                 (tokens, Type::Float)
             }
-            Some(Token::LCURLY) => {
+            Token::LCURLY => {
                 tokens.skip_one();
                 let (tokens, tys) = consume_list(tokens, Token::RCURLY, Token::COMMA, false)
                     .wrap_err("parsing tuple type")?;
                 (tokens, Type::Tuple(tys))
             }
-            Some(t) => bail!("expected start of type (VARIABLE | FLOAT | LCURLY), found {t:?}"),
-            None => {
-                bail!("expected start of type (VARIABLE | FLOAT | LCURLY), found end of tokens")
-            }
+            t => bail!("expected start of type (VARIABLE | FLOAT | LCURLY), found {t:?}"),
         };
 
         let (tokens, ty) = loop {
             match (tokens.first(), &ty) {
-                (Some(Token::LSQUARE), _) => {
+                (Token::LSQUARE, _) => {
                     tokens.skip_one();
 
                     let mut depth: u8 = 1;
 
                     loop {
-                        match tokens.next_and_skip().wrap_err("parsing array type")? {
+                        match tokens.next_and_skip() {
                             Token::RSQUARE => {
                                 break;
                             }
@@ -905,12 +894,12 @@ pub fn parse<'a>(
                 cmds.push(cmd);
             }
             Err(e) => {
-                if let Some(Token::NEWLINE) = tokens.first() {
+                if let Token::NEWLINE = tokens.first() {
                     tokens.skip_one();
                     continue;
                 }
 
-                if let Some(Token::END_OF_FILE) = tokens.first() {
+                if let Token::END_OF_FILE = tokens.first() {
                     break;
                 }
 
