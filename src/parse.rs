@@ -1,4 +1,4 @@
-use color_eyre::eyre::{bail, eyre, Context, Result};
+use color_eyre::eyre::{bail, Result};
 use colored::Colorize;
 use itertools::Itertools;
 
@@ -11,7 +11,7 @@ use crate::{
 use crate::{test_correct, test_solos};
 
 trait Consume<'a>: Sized {
-    fn consume(tokens: Parser<'a>) -> Result<(Parser<'a>, Self)>;
+    fn consume(tokens: Parser<'a>) -> ParseResult<'a, Self>;
     #[allow(dead_code)]
     fn get_name(&self) -> &'static str;
 }
@@ -35,6 +35,103 @@ impl<T: std::fmt::Display + std::fmt::Debug> PrintJoined for [T] {
     }
 }
 
+enum ParseResult<'a, T> {
+    NotParsed(Box<dyn Fn() -> String + 'a>, usize),
+    Parsed(Parser<'a>, T),
+}
+
+macro_rules! miss {
+    ($parser:ident, $($msg:tt)*) => {
+        return $parser.miss(Box::new(move || format!($($msg)*)))
+    };
+}
+
+macro_rules! consume {
+    ($parser:ident, $type:ty, $outvar:ident) => {
+        let (advanced_parser, $outvar) = match <$type>::consume($parser) {
+            ParseResult::NotParsed(report, position) => {
+                return ParseResult::NotParsed(report, position)
+            }
+            ParseResult::Parsed(parser, t) => {
+                debug_assert_ne!($parser, parser);
+                (parser, t)
+            }
+        };
+
+        $parser = advanced_parser;
+    };
+}
+
+fn consume_list<'a, 'b, T: Consume<'a> + std::fmt::Debug>(
+    mut parser: Parser<'a>,
+    end_token: Token<'a>,
+    delimeter: Token<'a>,
+    delimeter_terminated: bool,
+) -> ParseResult<'a, Vec<T>> {
+    let mut list = vec![];
+    loop {
+        if let ParseResult::Parsed(parser, _) = parser.check_skip(end_token) {
+            return parser.complete(list);
+        }
+
+        consume!(parser, T, t);
+        list.push(t);
+
+        match parser.first() {
+            t if t == delimeter => parser = parser.skip_one(),
+            t if !delimeter_terminated && t == end_token => {
+                parser = parser.skip_one();
+                return parser.complete(list);
+            }
+            t if delimeter_terminated => miss!(parser, "expected {delimeter:?}, found {t:?}"),
+            t => miss!(
+                parser,
+                "expected {delimeter:?} or {end_token:?}, found {t:?}"
+            ),
+        }
+    }
+}
+
+macro_rules! consume_list {
+    ($parser:ident, $end_token:tt, $delimeter:tt, $delimeter_terminated:expr, $outvar:ident) => {
+        let (advanced_parser, $outvar) = match consume_list(
+            $parser,
+            Token::$end_token,
+            Token::$delimeter,
+            $delimeter_terminated,
+        ) {
+            ParseResult::NotParsed(report, position) => {
+                return ParseResult::NotParsed(report, position)
+            }
+            ParseResult::Parsed(parser, t) => {
+                debug_assert_ne!($parser, parser);
+                (parser, t)
+            }
+        };
+
+        $parser = advanced_parser;
+    };
+    ($parser:ident, $end_token:tt, $delimeter:tt, $outvar:ident) => {
+        consume_list!($parser, $end_token, $delimeter, false, $outvar)
+    };
+    ($parser:ident, $end_token:tt, $outvar:ident) => {
+        consume_list!($parser, $end_token, COMMA, false, $outvar)
+    };
+}
+
+macro_rules! check {
+    ($parser:ident, $token:tt) => {
+        let advanced_parser = match $parser.check_skip(Token::$token) {
+            ParseResult::NotParsed(report, position) => {
+                return ParseResult::NotParsed(report, position)
+            }
+            ParseResult::Parsed(parser, _) => (parser),
+        };
+
+        $parser = advanced_parser;
+    };
+}
+
 #[derive(Debug, Clone, Copy)]
 struct Parser<'a> {
     original_tokens: &'a [Token<'a>],
@@ -50,23 +147,29 @@ impl PartialEq for Parser<'_> {
 }
 
 impl<'a> Parser<'a> {
-    fn skip_one(&mut self) {
+    fn complete<T>(&self, t: T) -> ParseResult<'a, T> {
+        ParseResult::Parsed(*self, t)
+    }
+
+    fn miss<T>(&self, report: Box<dyn Fn() -> String + 'a>) -> ParseResult<'a, T> {
+        ParseResult::NotParsed(report, self.current_position)
+    }
+
+    #[must_use]
+    fn skip_one(mut self) -> Self {
         self.current_position += 1;
+        self
     }
 
-    fn next_and_skip(&mut self) -> Token<'a> {
-        let next = self.first();
-        self.skip_one();
-        next
-    }
-
-    fn check_skip(&mut self, token: Token<'a>) -> Result<()> {
+    fn check_skip(self, token: Token<'a>) -> ParseResult<'a, ()> {
         debug_assert_ne!(token, Token::END_OF_FILE);
         if self.check_one(token) {
-            self.skip_one();
-            Ok(())
+            ParseResult::Parsed(self.skip_one(), ())
         } else {
-            Err(eyre!("expected {token:?}, found {:?}", self.first()))
+            ParseResult::NotParsed(
+                Box::new(move || format!("expected {token:?}, found {:?}", self.first())),
+                self.current_position,
+            )
         }
     }
 
@@ -80,10 +183,9 @@ impl<'a> Parser<'a> {
         unsafe { *self.original_tokens.get_unchecked(self.current_position) }
     }
 
-    fn next(&mut self) -> Token<'a> {
+    fn next(self) -> (Self, Token<'a>) {
         let next = self.first();
-        self.skip_one();
-        next
+        (self.skip_one(), next)
     }
 
     fn is_empty(&self) -> bool {
@@ -91,11 +193,8 @@ impl<'a> Parser<'a> {
     }
 
     /// This function prints the error token text in red and the surrounding text.
-    fn print_error(&self) {
-        // todo!();
-
+    fn print_error(&self, error_position: usize) {
         let current_position = self.current_position;
-        let error_position = current_position /* + */;
 
         let [source_pre, semi_valid, error, source_post] = undo_slice_by_cuts(
             self.source,
@@ -172,13 +271,13 @@ impl std::fmt::Display for Variable<'_> {
 }
 
 impl<'a> Consume<'a> for Variable<'a> {
-    fn consume(mut tokens: Parser<'a>) -> Result<(Parser<'a>, Self)> {
-        let s = match tokens.next() {
-            Token::VARIABLE(s) => s,
-            t => bail!("expected variable, found {t:?}"),
+    fn consume(parser: Parser<'a>) -> ParseResult<'a, Self> {
+        let (parser, s) = match parser.next() {
+            (parser, Token::VARIABLE(s)) => (parser, s),
+            t => miss!(parser, "expected variable, found {t:?}"),
         };
 
-        Ok((tokens, Self(s)))
+        parser.complete(Self(s))
     }
 
     fn get_name(&self) -> &'static str {
@@ -202,14 +301,13 @@ impl std::fmt::Display for LiteralString<'_> {
 }
 
 impl<'a> Consume<'a> for LiteralString<'a> {
-    fn consume(mut tokens: Parser<'a>) -> Result<(Parser<'a>, Self)> {
-        let s = match tokens.first() {
+    fn consume(parser: Parser<'a>) -> ParseResult<'a, Self> {
+        let s = match parser.first() {
             Token::STRING(s) => s,
-            t => bail!("expected string, found {t:?}"),
+            t => miss!(parser, "expected string, found {t:?}"),
         };
 
-        tokens.skip_one();
-        Ok((tokens, Self(s)))
+        parser.skip_one().complete(Self(s))
     }
 
     fn get_name(&self) -> &'static str {
@@ -227,11 +325,11 @@ impl std::fmt::Display for Field<'_> {
 }
 
 impl<'a> Consume<'a> for Field<'a> {
-    fn consume(tokens: Parser<'a>) -> Result<(Parser<'a>, Self)> {
-        let (mut tokens, s) = Variable::consume(tokens).wrap_err("parsing field")?;
-        tokens.check_skip(Token::COLON).wrap_err("parsing field")?;
-        let (tokens, ty) = Type::consume(tokens).wrap_err("parsing field")?;
-        Ok((tokens, Self(s, ty)))
+    fn consume(mut parser: Parser<'a>) -> ParseResult<'a, Self> {
+        consume!(parser, Variable, s);
+        check!(parser, COLON);
+        consume!(parser, Type, ty);
+        parser.complete(Self(s, ty))
     }
 
     fn get_name(&self) -> &'static str {
@@ -254,80 +352,78 @@ pub enum Cmd<'a> {
 }
 
 impl<'a> Consume<'a> for Cmd<'a> {
-    fn consume(mut tokens: Parser<'a>) -> Result<(Parser<'a>, Self)> {
-        match tokens.next_and_skip(){
-            Token::READ => {
-                tokens.check_skip(Token::IMAGE).wrap_err("parsing read command")?;
-                let (mut tokens, s) = LiteralString::consume(tokens).wrap_err("parsing read command")?;
-                tokens.check_skip(Token::TO).wrap_err("parsing read command")?;
-                let (mut tokens, lvalue) = LValue::consume(tokens).wrap_err("parsing read command")?;
-                tokens.check_skip(Token::NEWLINE).wrap_err("parsing read command")?;
-                Ok((tokens, Self::Read(s, lvalue)))
+    fn consume(parser: Parser<'a>) -> ParseResult<'a, Self> {
+        match parser.next() {
+            (mut parser, Token::READ) => {
+                check!(parser, IMAGE);
+                consume!(parser, LiteralString, s);
+                check!(parser, TO);
+                consume!(parser, LValue, lvalue);
+                check!(parser, NEWLINE);
+                parser.complete(Self::Read(s, lvalue))
             }
-            Token::TIME => {
-                let (tokens, cmd) = Cmd::consume(tokens).wrap_err("parsing time command")?;
-                Ok((tokens, Self::Time(Box::new(cmd))))
+            (mut parser, Token::TIME) => {
+                consume!(parser, Cmd, cmd);
+                parser.complete(Self::Time(Box::new(cmd)))
             }
-            Token::LET => {
-                let (mut tokens, lvalue) = LValue::consume(tokens).wrap_err("parsing let command")?;
-                tokens.check_skip(Token::EQUALS).wrap_err("parsing let command")?;
-                let (mut tokens, expr) = Expr::consume(tokens).wrap_err("parsing let command")?;
-                tokens.check_skip(Token::NEWLINE).wrap_err("parsing let command")?;
-                Ok((tokens, Self::Let(lvalue, expr)))
+            (mut parser, Token::LET) => {
+                consume!(parser, LValue, lvalue);
+                check!(parser, EQUALS);
+                consume!(parser, Expr, expr);
+                check!(parser, NEWLINE);
+                parser.complete(Self::Let(lvalue, expr))
             }
-            Token::ASSERT => {
-                let (mut tokens, expr) = Expr::consume(tokens).wrap_err("parsing assert command")?;
-                tokens.check_skip(Token::COMMA).wrap_err("parsing assert command")?;
-                let (mut tokens, s) = LiteralString::consume(tokens).wrap_err("parsing assert command")?;
-                tokens.check_skip(Token::NEWLINE).wrap_err("parsing assert command")?;
-                Ok((tokens, Self::Assert(expr, s)))
+            (mut parser, Token::ASSERT) => {
+                consume!(parser, Expr, expr);
+                check!(parser, COMMA);
+                consume!(parser, LiteralString, s);
+                check!(parser, NEWLINE);
+                parser.complete(Self::Assert(expr, s))
             }
-            Token::SHOW => {
-                let (mut tokens, expr) = Expr::consume(tokens).wrap_err("parsing show command")?;
-                tokens.check_skip(Token::NEWLINE).wrap_err("parsing show command")?;
-                Ok((tokens, Self::Show(expr)))
+            (mut parser, Token::SHOW) => {
+                consume!(parser, Expr, expr);
+                check!(parser, NEWLINE);
+                parser.complete(Self::Show(expr))
             }
-            Token::WRITE => {
-                tokens.check_skip(Token::IMAGE).wrap_err("parsing write command")?;
-                let (mut tokens, expr) = Expr::consume(tokens).wrap_err("parsing write command")?;
-                tokens.check_skip(Token::TO).wrap_err("parsing write command")?;
-                let (mut tokens, s) = LiteralString::consume(tokens).wrap_err("parsing write command")?;
-                tokens.check_skip(Token::NEWLINE).wrap_err("parsing write command")?;
-                Ok((tokens, Self::Write(expr, s)))
+            (mut parser, Token::WRITE) => {
+                check!(parser, IMAGE);
+                consume!(parser, Expr, expr);
+                check!(parser, TO);
+                consume!(parser, LiteralString, s);
+                check!(parser, NEWLINE);
+                parser.complete(Self::Write(expr, s))
             }
-            Token::PRINT => {
-                let (mut tokens, s) = LiteralString::consume(tokens).wrap_err("parsing print command")?;
-                tokens.check_skip(Token::NEWLINE).wrap_err("parsing print command")?;
-                Ok((tokens, Self::Print(s)))
+            (mut parser, Token::PRINT) => {
+                consume!(parser, LiteralString, s);
+                check!(parser, NEWLINE);
+                parser.complete(Self::Print(s))
             }
-            Token::FN => {
-                let (mut tokens, v) = Variable::consume(tokens).wrap_err("parsing fn command")?;
-                tokens.check_skip(Token::LPAREN).wrap_err("parsing fn command")?;
-                let (mut tokens, bindings) = consume_list(tokens, Token::RPAREN, Token::COMMA, false).wrap_err("parsing fn command")?;
-                tokens.check_skip(Token::COLON).wrap_err("parsing fn command")?;
-                let (mut tokens, ty) = Type::consume(tokens).wrap_err("parsing fn command")?;
-                tokens.check_skip(Token::LCURLY).wrap_err("parsing fn command")?;
-                tokens.check_skip(Token::NEWLINE).wrap_err("parsing fn command")?;
-                let (tokens, statements) = consume_list(tokens, Token::RCURLY, Token::NEWLINE, true).wrap_err("parsing fn command")?;
-                Ok((tokens, Self::Fn(v, bindings, ty, statements)))
+            (mut parser, Token::FN) => {
+                consume!(parser, Variable, v);
+                check!(parser, LPAREN);
+                consume_list!(parser, RPAREN, bindings);
+                check!(parser, COLON);
+                consume!(parser, Type, ty);
+                check!(parser, LCURLY);
+                check!(parser, NEWLINE);
+                consume_list!(parser, RCURLY, NEWLINE, true, statements);
+                parser.complete(Self::Fn(v, bindings, ty, statements))
             }
-            Token::TYPE => {
-                let (mut tokens, v) = Variable::consume(tokens).wrap_err("parsing type command")?;
-                tokens.check_skip(Token::EQUALS).wrap_err("parsing type command")?;
-                let (mut tokens, ty) = Type::consume(tokens).wrap_err("parsing type command")?;
-                tokens.check_skip(Token::NEWLINE).wrap_err("parsing type command")?;
-                Ok((tokens, Self::Type(v, ty)))
+            (mut parser, Token::TYPE) => {
+                consume!(parser, Variable, v);
+                check!(parser, EQUALS);
+                consume!(parser, Type, ty);
+                check!(parser, NEWLINE);
+                parser.complete(Self::Type(v, ty))
             }
-            Token::STRUCT => {
-                let (mut tokens, v) = Variable::consume(tokens).wrap_err("parsing struct command")?;
-                tokens.check_skip(Token::LCURLY).wrap_err("parsing struct command")?;
-                tokens
-                    .check_skip(Token::NEWLINE)
-                    .wrap_err("parsing struct command")?;
-                let (tokens, fields) = consume_list(tokens, Token::RCURLY, Token::NEWLINE, false).wrap_err("parsing struct command")?;
-                Ok((tokens, Self::Struct(v, fields)))
+            (mut parser, Token::STRUCT) => {
+                consume!(parser, Variable, v);
+                check!(parser, LCURLY);
+                check!(parser, NEWLINE);
+                consume_list!(parser, RCURLY, NEWLINE, fields);
+                parser.complete(Self::Struct(v, fields))
             }
-            t => Err(eyre!("expected a command keyword (ASSERT | RETURN | LET | ASSERT | PRINT | SHOW | TIME | FN | TYPE | STRUCT), found {:?}", t)),
+            t => miss!(parser, "expected a command keyword (ASSERT | RETURN | LET | ASSERT | PRINT | SHOW | TIME | FN | TYPE | STRUCT), found {t:?}"),
         }
     }
 
@@ -387,37 +483,31 @@ impl std::fmt::Display for Statement<'_> {
 }
 
 impl<'a> Consume<'a> for Statement<'a> {
-    fn consume(mut tokens: Parser<'a>) -> Result<(Parser<'a>, Self)> {
-        match tokens.first() {
+    fn consume(mut parser: Parser<'a>) -> ParseResult<'a, Self> {
+        match parser.first() {
             Token::ASSERT => {
-                tokens.skip_one();
-                let (mut tokens, expr) =
-                    Expr::consume(tokens).wrap_err("parsing assert statement")?;
-                tokens
-                    .check_skip(Token::COMMA)
-                    .wrap_err("parsing assert statement")?;
-                let (tokens, msg) =
-                    LiteralString::consume(tokens).wrap_err("parsing assert statement")?;
-                Ok((tokens, Self::Assert(expr, msg)))
+                parser = parser.skip_one();
+                consume!(parser, Expr, expr);
+                check!(parser, COMMA);
+                consume!(parser, LiteralString, msg);
+                parser.complete(Self::Assert(expr, msg))
             }
             Token::RETURN => {
-                tokens.skip_one();
-                let (tokens, expr) = Expr::consume(tokens).wrap_err("parsing return statement")?;
-                Ok((tokens, Self::Return(expr)))
+                parser = parser.skip_one();
+                consume!(parser, Expr, expr);
+                parser.complete(Self::Return(expr))
             }
             Token::LET => {
-                tokens.skip_one();
-                let (mut tokens, lvalue) =
-                    LValue::consume(tokens).wrap_err("parsing let statement")?;
-                tokens
-                    .check_skip(Token::EQUALS)
-                    .wrap_err("parsing let statement")?;
-                let (tokens, expr) = Expr::consume(tokens).wrap_err("parsing let statement")?;
-                Ok((tokens, Self::Let(lvalue, expr)))
+                parser = parser.skip_one();
+                consume!(parser, LValue, lvalue);
+                check!(parser, EQUALS);
+                consume!(parser, Expr, expr);
+                parser.complete(Self::Let(lvalue, expr))
             }
-            t => Err(eyre!(
+            t => miss!(
+                parser,
                 "expected a start of statement (ASSERT | RETURN | LET), found {t:?}"
-            )),
+            ),
         }
     }
 
@@ -510,156 +600,90 @@ impl std::fmt::Display for Expr<'_> {
     }
 }
 
-fn consume_list<'a, 'b, T: Consume<'a> + std::fmt::Debug>(
-    mut tokens: Parser<'a>,
-    end_token: Token<'a>,
-    delimeter: Token<'a>,
-    delimeter_terminated: bool,
-) -> Result<(Parser<'a>, Vec<T>)> {
-    let mut list = vec![];
-    loop {
-        if tokens.check_skip(end_token).is_ok() {
-            break;
-        }
-
-        let (rem_tokens, t) = T::consume(tokens)?;
-        if tokens == rem_tokens {
-            return Err(eyre!("Could not parse"));
-        }
-
-        tokens = rem_tokens;
-        list.push(t);
-
-        match tokens.first() {
-            t if t == delimeter => tokens.skip_one(),
-            t if !delimeter_terminated && t == end_token => break tokens.skip_one(),
-            t if delimeter_terminated => bail!("expected {delimeter:?}, found {t:?}"),
-            t => bail!("expected {delimeter:?} or {end_token:?}, found {t:?}"),
-        }
-    }
-
-    Ok((tokens, list))
-}
-
 impl<'a> Consume<'a> for Expr<'a> {
-    fn consume(mut tokens: Parser<'a>) -> Result<(Parser<'a>, Expr<'a>)> {
-        let (mut tokens, mut expr) = match tokens.first() {
-            Token::INTVAL(s) => {
-                tokens.skip_one();
-                (tokens, Expr::Int(s.parse().wrap_err("parsing int expr")?))
+    fn consume(parser: Parser<'a>) -> ParseResult<'a, Self> {
+        let (mut parser, mut expr) = match parser.next() {
+            (parser, Token::INTVAL(s)) => {
+                if let Ok(i) = s.parse::<i64>() {
+                    (parser, Expr::Int(i))
+                } else {
+                    miss!(parser, "couldn't parse integer {s}")
+                }
             }
-            Token::FLOATVAL(s) => {
-                tokens.skip_one();
-                (
-                    tokens,
-                    Expr::Float({
-                        let f = s.parse::<f64>().wrap_err("parsing float expr")?;
-                        if !f.is_finite() {
-                            bail!("expected a finite float, found {f}");
-                        } else {
-                            f
-                        }}
+            (parser, Token::FLOATVAL(s)) => {
+                if let Ok(f) = s.parse::<f64>() {
+                    if !f.is_finite() {
+                        miss!(parser, "expected a finite float, found {f}");
+                    }
 
-                    ),
-                )
+                    (parser, Expr::Float(f))
+                } else {
+                    miss!(parser, "couldn't parse float {s}")
+                }
             }
-            Token::VOID => {
-                tokens.skip_one();
-                (tokens, Expr::Void)
+            (parser, Token::VOID) => (parser, Expr::Void),
+            (parser, Token::TRUE) => (parser, Expr::True),
+            (parser, Token::FALSE) => (parser, Expr::False),
+            (parser, Token::VARIABLE(s)) => 
+                (parser, Expr::Variable(s)),
+            
+            (mut parser, Token::LSQUARE) => {
+                consume_list!(parser, RSQUARE, exprs);
+                (parser, Expr::Array(exprs))
             }
-            Token::TRUE => {
-                tokens.skip_one();
-                (tokens, Expr::True)
+            (mut parser, Token::LPAREN) => {
+                consume!(parser, Expr, expr);
+                check!(parser, RPAREN);
+                (parser, expr)
             }
-            Token::FALSE => {
-                tokens.skip_one();
-                (tokens, Expr::False)
+            (mut parser, Token::LCURLY) => {
+                consume_list!(parser, RCURLY, exprs);
+                (parser, Expr::Tuple(exprs))
             }
-            Token::VARIABLE(s) => {
-                tokens.skip_one();
-                (tokens, Expr::Variable(s))
-            }
-            Token::LSQUARE => {
-                tokens.skip_one();
-
-                let (tokens, exprs) = consume_list(tokens, Token::RSQUARE, Token::COMMA, false).wrap_err("parsing array literal expr")?;
-
-                (tokens, Expr::Array(exprs))
-            }
-            Token::LPAREN => {
-                tokens.skip_one();
-                let (mut tokens, expr) = Expr::consume(tokens).wrap_err("parsing parenthesis expr")?;
-                tokens.check_skip(Token::RPAREN).wrap_err("parsing parenthesis expr")?;
-                (tokens, expr)
-            }
-            Token::LCURLY => {
-                tokens.skip_one();
-                let (tokens, exprs) = consume_list(tokens, Token::RCURLY, Token::COMMA, false).wrap_err("parsing tuple literal expr")?;
-                (tokens, Expr::Tuple(exprs))
-            }
-            t => bail!(
+            t => miss!(parser,
                 "expected start of expression (INTVAL | FLOATVAL | TRUE | FALSE | VARIABLE | LSQUARE | LPAREN | LCURLY), found {t:?}"
             ),
         };
 
-        let (tokens, expr) = loop {
-            match (tokens.first(), &expr) {
-                (Token::LSQUARE, _) => {
-                    tokens.skip_one();
-                    let (rem_tokens, exprs) =
-                        consume_list(tokens, Token::RSQUARE, Token::COMMA, false)
-                            .wrap_err("parsing array index expr")?;
-                    tokens = rem_tokens;
-                    expr = Expr::ArrayIndex(Box::new(expr), exprs)
+        let (parser, expr) = loop {
+            let (rem_parser, new_expr) = match (parser.next(), &expr) {
+                ((mut parser, Token::LSQUARE), _) => {
+                    consume_list!(parser, RSQUARE, exprs);
+                    (parser, Expr::ArrayIndex(Box::new(expr), exprs))
                 }
-                (Token::LPAREN, Expr::Variable(s)) => {
-                    let s = Variable(s);
-                    tokens.skip_one();
-                    let (rem_tokens, exprs) =
-                        consume_list(tokens, Token::RPAREN, Token::COMMA, false)
-                            .wrap_err("parsing call expr")?;
-                    tokens = rem_tokens;
-                    expr = Expr::Call(s, exprs)
+                ((mut parser, Token::LPAREN), Expr::Variable(s)) => {
+                    consume_list!(parser, RPAREN, exprs);
+                    (parser, Expr::Call(Variable(s), exprs))
                 }
-                (Token::LCURLY, Expr::Variable(s)) => {
-                    let s = Variable(s);
-                    tokens.skip_one();
-                    let (rem_tokens, exprs) =
-                        consume_list(tokens, Token::RCURLY, Token::COMMA, false)
-                            .wrap_err("parsing struct literal expr")?;
-                    tokens = rem_tokens;
-                    expr = Expr::StructLiteral(s, exprs)
+                ((mut parser, Token::LCURLY), Expr::Variable(s)) => {
+                    consume_list!(parser, RCURLY, exprs);
+                    (parser, Expr::StructLiteral(Variable(s), exprs))
                 }
-                (Token::LCURLY, _) => {
-                    tokens.skip_one();
-                    let (rem_tokens, exprs) =
-                        consume_list(tokens, Token::RCURLY, Token::COMMA, false)
-                            .wrap_err("parsing tuple index expr")?;
-                    tokens = rem_tokens;
-                    expr = Expr::TupleIndex(Box::new(expr), exprs)
+                ((mut parser, Token::LCURLY), _) => {
+                    consume_list!(parser, RCURLY, exprs);
+                    (parser, Expr::TupleIndex(Box::new(expr), exprs))
                 }
-                (Token::DOT, _) => {
-                    tokens.skip_one();
-                    let (rem_tokens, var) =
-                        Variable::consume(tokens).wrap_err("parsing dot expr")?;
-                    tokens = rem_tokens;
-                    expr = Expr::Dot(Box::new(expr), var)
+                ((mut parser, Token::DOT), _) => {
+                    consume!(parser, Variable, var);
+                    (parser, Expr::Dot(Box::new(expr), var))
                 }
-                _ => break (tokens, expr),
+                _ => break (parser, expr),
             };
+            parser = rem_parser;
+            expr = new_expr;
         };
 
-        // let (tokens, expr) = match tokens.first() {
+        // let (parser, expr) = match parser.first() {
         //     // // ? Only Eq right now to pass that bad test
         //     // Some(Token::OP(c @ Op::Eq)) => {
-        //     //     tokens.skip_one();
-        //     //     let (tokens, expr2) = Expr::consume(tokens).wrap_err("parsing binary op expr")?;
-        //     //     (tokens, Expr::Binop(Box::new(expr), c, Box::new(expr2)))
+        //     //     parser.skip_one();
+        //     //     let (parser, expr2) = Expr::consume(parser).wrap_err("parsing binary op expr")?;
+        //     //     (parser, Expr::Binop(Box::new(expr), c, Box::new(expr2)))
         //     // }
-        //     _ => (tokens, expr),
+        //     _ => (parser, expr),
         // };
 
-        Ok((tokens, expr))
+        parser.complete(expr)
     }
 
     fn get_name(&self) -> &'static str {
@@ -697,32 +721,28 @@ impl std::fmt::Display for LValue<'_> {
 }
 
 impl<'a> Consume<'a> for LValue<'a> {
-    fn consume(mut tokens: Parser<'a>) -> Result<(Parser<'a>, Self)> {
-        let (mut tokens, lv) = match tokens.first() {
-            Token::VARIABLE(s) => {
-                tokens.skip_one();
-                (tokens, LValue::Var(Variable(s)))
+    fn consume(parser: Parser<'a>) -> ParseResult<'a, Self> {
+        let (parser, lv) = match parser.next() {
+            (parser, Token::VARIABLE(s)) => (parser, LValue::Var(Variable(s))),
+            (mut parser, Token::LCURLY) => {
+                consume_list!(parser, RCURLY, lvs);
+                (parser, LValue::Tuple(lvs))
             }
-            Token::LCURLY => {
-                tokens.skip_one();
-                let (tokens, lvs) = consume_list(tokens, Token::RCURLY, Token::COMMA, false)
-                    .wrap_err("parsing tuple lvalue")?;
-                (tokens, LValue::Tuple(lvs))
-            }
-            t => bail!("expected start of lvalue (VARIABLE | LCURLY), found {t:?}"),
+            t => miss!(
+                parser,
+                "expected start of lvalue (VARIABLE | LCURLY), found {t:?}"
+            ),
         };
 
-        let (tokens, lv) = match (tokens.first(), &lv) {
-            (Token::LSQUARE, &LValue::Var(s)) => {
-                tokens.skip_one();
-                let (tokens, args) = consume_list(tokens, Token::RSQUARE, Token::COMMA, false)
-                    .wrap_err("parsing array lvalue")?;
-                (tokens, LValue::Array(s, args))
+        let (parser, lv) = match (parser.next(), &lv) {
+            ((mut parser, Token::LSQUARE), &LValue::Var(s)) => {
+                consume_list!(parser, RSQUARE, args);
+                (parser, LValue::Array(s, args))
             }
-            _ => (tokens, lv),
+            _ => (parser, lv),
         };
 
-        Ok((tokens, lv))
+        parser.complete(lv)
     }
 
     fn get_name(&self) -> &'static str {
@@ -777,63 +797,52 @@ impl std::fmt::Display for Type<'_> {
 }
 
 impl<'a> Consume<'a> for Type<'a> {
-    fn consume(mut tokens: Parser<'a>) -> Result<(Parser<'a>, Self)> {
-        let (mut tokens, mut ty) = match tokens.first() {
-            Token::VARIABLE(s) => {
-                tokens.skip_one();
-                (tokens, Type::Struct(s))
+    fn consume(parser: Parser<'a>) -> ParseResult<'a, Self> {
+        let (mut parser, mut ty) = match parser.next() {
+            (parser, Token::VARIABLE(s)) => (parser, Type::Struct(s)),
+            (parser, Token::INT) => (parser, Type::Int),
+            (parser, Token::BOOL) => (parser, Type::Bool),
+            (parser, Token::VOID) => (parser, Type::Void),
+            (parser, Token::FLOAT) => (parser, Type::Float),
+            (mut parser, Token::LCURLY) => {
+                consume_list!(parser, RCURLY, tys);
+                (parser, Type::Tuple(tys))
             }
-            Token::INT => {
-                tokens.skip_one();
-                (tokens, Type::Int)
-            }
-            Token::BOOL => {
-                tokens.skip_one();
-                (tokens, Type::Bool)
-            }
-            Token::VOID => {
-                tokens.skip_one();
-                (tokens, Type::Void)
-            }
-            Token::FLOAT => {
-                tokens.skip_one();
-                (tokens, Type::Float)
-            }
-            Token::LCURLY => {
-                tokens.skip_one();
-                let (tokens, tys) = consume_list(tokens, Token::RCURLY, Token::COMMA, false)
-                    .wrap_err("parsing tuple type")?;
-                (tokens, Type::Tuple(tys))
-            }
-            t => bail!("expected start of type (VARIABLE | FLOAT | LCURLY), found {t:?}"),
+            t => miss!(
+                parser,
+                "expected start of type (VARIABLE | FLOAT | LCURLY), found {t:?}"
+            ),
         };
 
-        let (tokens, ty) = loop {
-            match (tokens.first(), &ty) {
+        #[allow(clippy::while_let_loop)]
+        loop {
+            match (parser.first(), &ty) {
                 (Token::LSQUARE, _) => {
-                    tokens.skip_one();
+                    parser = parser.skip_one();
 
                     let mut depth: u8 = 1;
 
                     loop {
-                        match tokens.next_and_skip() {
-                            Token::RSQUARE => {
+                        match parser.next() {
+                            (advanced_parser, Token::RSQUARE) => {
+                                parser = advanced_parser;
                                 break;
                             }
-                            Token::COMMA => {
+                            (advanced_parser, Token::COMMA) => {
+                                parser = advanced_parser;
                                 depth += 1;
                             }
-                            t => bail!("expected RSQUARE or COMMA, found {t:?}"),
+                            t => miss!(parser, "expected RSQUARE or COMMA, found {t:?}"),
                         }
                     }
 
-                    ty = Self::Array(Box::new(ty), depth);
+                    ty = Self::Array(Box::new(ty), depth)
                 }
-                _ => break (tokens, ty),
+                _ => break,
             };
-        };
+        }
 
-        Ok((tokens, ty))
+        parser.complete(ty)
     }
 
     fn get_name(&self) -> &'static str {
@@ -855,13 +864,11 @@ impl std::fmt::Display for Binding<'_> {
 }
 
 impl<'a> Consume<'a> for Binding<'a> {
-    fn consume(tokens: Parser<'a>) -> Result<(Parser<'a>, Self)> {
-        let (mut tokens, lv) = LValue::consume(tokens).wrap_err("parsing binding")?;
-        tokens
-            .check_skip(Token::COLON)
-            .wrap_err("parsing binding")?;
-        let (tokens, ty) = Type::consume(tokens).wrap_err("parsing binding")?;
-        Ok((tokens, Self::Var(lv, ty)))
+    fn consume(mut parser: Parser<'a>) -> ParseResult<'a, Self> {
+        consume!(parser, LValue, lv);
+        check!(parser, COLON);
+        consume!(parser, Type, ty);
+        parser.complete(Self::Var(lv, ty))
     }
 
     fn get_name(&self) -> &'static str {
@@ -876,36 +883,36 @@ pub fn parse<'a>(
 ) -> Result<Vec<Cmd<'a>>> {
     let mut cmds = vec![];
 
-    let mut tokens = Parser {
+    let mut parser = Parser {
         original_tokens: tokens,
         current_position: 0,
         input_by_token,
         source,
     };
 
-    while !tokens.is_empty() {
-        let cmd = Cmd::consume(tokens);
+    while !parser.is_empty() {
+        let cmd = Cmd::consume(parser);
 
         match cmd {
-            Ok((moved_tokens, cmd)) => {
-                debug_assert_ne!(moved_tokens, tokens);
-                tokens = moved_tokens;
-                // tokens.successfully_parsed.set(0);
+            ParseResult::Parsed(moved_parser, cmd) => {
+                // debug_assert_ne!(moved_parser, parser);
+                parser = moved_parser;
+                // parser.successfully_parsed.set(0);
                 cmds.push(cmd);
             }
-            Err(e) => {
-                if let Token::NEWLINE = tokens.first() {
-                    tokens.skip_one();
+            ParseResult::NotParsed(e, err_position) => {
+                if let Token::NEWLINE = parser.first() {
+                    parser = parser.skip_one();
                     continue;
                 }
 
-                if let Token::END_OF_FILE = tokens.first() {
+                if let Token::END_OF_FILE = parser.first() {
                     break;
                 }
 
-                tokens.print_error();
+                parser.print_error(err_position);
 
-                return Err(e);
+                bail!("{}", e());
             }
         }
     }
