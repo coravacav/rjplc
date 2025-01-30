@@ -1,7 +1,7 @@
 mod lex;
 mod parse;
 
-use std::path::PathBuf;
+use std::{io::stdout, path::PathBuf, process::exit};
 
 use clap::Parser;
 use itertools::Itertools;
@@ -83,12 +83,20 @@ fn main() {
     };
 
     if !parse {
+        let mut output = String::new();
+        use std::fmt::Write;
+
         for token in &tokens {
-            println!("{}", token);
+            writeln!(output, "{}", token).unwrap();
+        }
+        writeln!(output, "Compilation succeeded").unwrap();
+
+        {
+            use std::io::Write;
+            stdout().write_all(output.as_bytes()).unwrap();
         }
 
-        println!("Compilation succeeded");
-        return;
+        exit(0);
     }
 
     let parsed = match parse::parse(&tokens, &input_by_token, &file) {
@@ -104,12 +112,20 @@ fn main() {
     };
 
     if !typecheck {
+        let mut output = String::new();
+        use std::fmt::Write;
+
         for parsed in &parsed {
-            println!("{}", parsed);
+            writeln!(output, "{}", parsed).unwrap();
+        }
+        writeln!(output, "Compilation succeeded").unwrap();
+
+        {
+            use std::io::Write;
+            stdout().write_all(output.as_bytes()).unwrap();
         }
 
-        println!("Compilation succeeded");
-        return;
+        exit(0);
     }
 
     let _ = parsed;
