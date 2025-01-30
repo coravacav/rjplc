@@ -2,8 +2,8 @@ use color_eyre::eyre::Result;
 use nom::{
     branch::alt,
     bytes::complete::{tag, take_till, take_until, take_while},
-    character::complete::{char, digit1, one_of, satisfy},
-    combinator::{map, opt, recognize, value},
+    character::complete::{char, digit1, satisfy},
+    combinator::{fail, map, opt, recognize, value},
     multi::many1,
     sequence::{delimited, preceded, terminated, tuple},
     Finish,
@@ -214,33 +214,36 @@ fn variable_or_keyword(input: &str) -> nom::IResult<&str, Token> {
     )(input)
 }
 
-fn op(input: &str) -> nom::IResult<&str, Token> {
-    map(
-        alt((
-            tag("=="),
-            tag("&&"),
-            tag(">="),
-            tag("<="),
-            recognize(one_of("+-*/%!><")),
-        )),
-        |s: &str| {
-            Token::OP(match s {
-                "==" => Op::Eq,
-                "+" => Op::Add,
-                "-" => Op::Sub,
-                "*" => Op::Mul,
-                "/" => Op::Div,
-                "%" => Op::Mod,
-                "!" => Op::Not,
-                ">" => Op::Greater,
-                "<" => Op::Less,
-                "&&" => Op::And,
-                ">=" => Op::GreaterEq,
-                "<=" => Op::LessEq,
-                _ => unreachable!("Invalid op"),
-            })
-        },
-    )(input)
+fn op_and_symbol(input: &str) -> nom::IResult<&str, Token> {
+    match input.get(0..2) {
+        Some("&&") => return Ok((&input[2..], Token::OP(Op::And))),
+        Some("==") => return Ok((&input[2..], Token::OP(Op::Eq))),
+        Some(">=") => return Ok((&input[2..], Token::OP(Op::GreaterEq))),
+        Some("<=") => return Ok((&input[2..], Token::OP(Op::LessEq))),
+        _ => {}
+    };
+
+    match input.get(0..1) {
+        Some("+") => Ok((&input[1..], Token::OP(Op::Add))),
+        Some("-") => Ok((&input[1..], Token::OP(Op::Sub))),
+        Some("*") => Ok((&input[1..], Token::OP(Op::Mul))),
+        Some("/") => Ok((&input[1..], Token::OP(Op::Div))),
+        Some("%") => Ok((&input[1..], Token::OP(Op::Mod))),
+        Some("!") => Ok((&input[1..], Token::OP(Op::Not))),
+        Some(">") => Ok((&input[1..], Token::OP(Op::Greater))),
+        Some("<") => Ok((&input[1..], Token::OP(Op::Less))),
+        Some("=") => Ok((&input[1..], Token::EQUALS)),
+        Some("{") => Ok((&input[1..], Token::LCURLY)),
+        Some("}") => Ok((&input[1..], Token::RCURLY)),
+        Some("(") => Ok((&input[1..], Token::LPAREN)),
+        Some(")") => Ok((&input[1..], Token::RPAREN)),
+        Some("[") => Ok((&input[1..], Token::LSQUARE)),
+        Some("]") => Ok((&input[1..], Token::RSQUARE)),
+        Some(":") => Ok((&input[1..], Token::COLON)),
+        Some(",") => Ok((&input[1..], Token::COMMA)),
+        Some(".") => Ok((&input[1..], Token::DOT)),
+        _ => fail(input),
+    }
 }
 
 pub fn nom_lex(input: &str) -> nom::IResult<&str, (Vec<Token>, Vec<&str>)> {
@@ -265,17 +268,7 @@ pub fn nom_lex(input: &str) -> nom::IResult<&str, (Vec<Token>, Vec<&str>)> {
                         Token::NEWLINE,
                         terminated(opt(preceded(tag("//"), take_until("\n"))), char('\n')),
                     ),
-                    op,
-                    value(Token::EQUALS, tag("=")),
-                    value(Token::LCURLY, tag("{")),
-                    value(Token::RCURLY, tag("}")),
-                    value(Token::LPAREN, tag("(")),
-                    value(Token::RPAREN, tag(")")),
-                    value(Token::LSQUARE, tag("[")),
-                    value(Token::RSQUARE, tag("]")),
-                    value(Token::COLON, tag(":")),
-                    value(Token::COMMA, tag(",")),
-                    value(Token::DOT, tag(".")),
+                    op_and_symbol,
                 )),
                 Option::Some,
             ),
