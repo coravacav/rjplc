@@ -17,21 +17,19 @@ trait Consume<'a>: Sized {
 }
 
 trait PrintJoined {
-    fn print_joined(&self, sep: &str) -> Result<String>;
+    fn print_joined(&self, f: &mut std::fmt::Formatter<'_>, sep: &str) -> std::fmt::Result;
 }
 
 impl<T: std::fmt::Display + std::fmt::Debug> PrintJoined for [T] {
-    fn print_joined(&self, sep: &str) -> Result<String> {
-        use std::fmt::Write;
-        let mut s = String::new();
+    fn print_joined(&self, f: &mut std::fmt::Formatter<'_>, sep: &str) -> std::fmt::Result {
         for (i, t) in self.iter().enumerate() {
             if i != 0 {
-                write!(s, "{sep}")?;
+                write!(f, "{sep}")?;
             }
-            write!(s, "{t}")?;
+            write!(f, "{t}")?;
         }
 
-        Ok(s)
+        Ok(())
     }
 }
 
@@ -427,23 +425,23 @@ impl std::fmt::Display for Cmd<'_> {
             Cmd::Show(expr) => write!(f, "(ShowCmd {expr})"),
             Cmd::Time(cmd) => write!(f, "(TimeCmd {cmd})"),
             Cmd::Fn(name, bindings, ty, statements) => {
-                write!(
-                    f,
-                    "(FnCmd {name} (({})) {ty} {})",
-                    bindings.print_joined(" ").map_err(|_| std::fmt::Error)?,
-                    statements.print_joined(" ").map_err(|_| std::fmt::Error)?
-                )
+                write!(f, "(FnCmd {name} ((",)?;
+                bindings.print_joined(f, " ")?;
+                write!(f, ")) {ty} ")?;
+                statements.print_joined(f, " ")?;
+                write!(f, ")")
             }
             Cmd::Type(name, ty) => {
                 write!(f, "(TypeCmd {name} {ty})")
             }
             Cmd::Struct(name, fields) => {
-                write!(
-                    f,
-                    "(StructCmd {name}{}{})",
-                    if fields.is_empty() { "" } else { " " },
-                    fields.print_joined(" ").map_err(|_| std::fmt::Error)?
-                )
+                if fields.is_empty() {
+                    write!(f, "(StructCmd {name})")
+                } else {
+                    write!(f, "(StructCmd {name} ")?;
+                    fields.print_joined(f, " ")?;
+                    write!(f, ")")
+                }
             }
         }
     }
@@ -525,53 +523,53 @@ impl std::fmt::Display for Expr<'_> {
             Expr::Void => write!(f, "(VoidExpr)"),
             Expr::Variable(s) => write!(f, "(VarExpr {s})"),
             Expr::Array(exprs) => {
-                write!(
-                    f,
-                    "(ArrayLiteralExpr{}{})",
-                    if exprs.is_empty() { "" } else { " " },
-                    exprs.print_joined(" ").map_err(|_| std::fmt::Error)?
-                )
+                if exprs.is_empty() {
+                    write!(f, "(ArrayLiteralExpr)")
+                } else {
+                    write!(f, "(ArrayLiteralExpr ")?;
+                    exprs.print_joined(f, " ")?;
+                    write!(f, ")")
+                }
             }
             Expr::Tuple(exprs) => {
-                write!(
-                    f,
-                    "(TupleLiteralExpr {})",
-                    exprs.print_joined(" ").map_err(|_| std::fmt::Error)?
-                )
+                write!(f, "(TupleLiteralExpr ")?;
+                exprs.print_joined(f, " ")?;
+                write!(f, ")")
             }
             Expr::ArrayIndex(s, exprs) => {
-                write!(
-                    f,
-                    "(ArrayIndexExpr {s}{}{})",
-                    if exprs.is_empty() { "" } else { " " },
-                    exprs.print_joined(" ").map_err(|_| std::fmt::Error)?
-                )
+                if exprs.is_empty() {
+                    write!(f, "(ArrayIndexExpr {s})")
+                } else {
+                    write!(f, "(ArrayIndexExpr {s} ")?;
+                    exprs.print_joined(f, " ")?;
+                    write!(f, ")")
+                }
             }
             Expr::TupleIndex(s, exprs) => {
-                write!(
-                    f,
-                    "(TupleIndexExpr {s} {})",
-                    exprs.print_joined(" ").map_err(|_| std::fmt::Error)?
-                )
+                write!(f, "(TupleIndexExpr {s} ")?;
+                exprs.print_joined(f, " ")?;
+                write!(f, ")")
             }
             Expr::Binop(expr, op, expr2) => {
                 write!(f, "(BinopExpr {expr} {op} {expr2})")
             }
             Expr::Call(expr, exprs) => {
-                write!(
-                    f,
-                    "(CallExpr {expr}{}{})",
-                    if exprs.is_empty() { "" } else { " " },
-                    exprs.print_joined(" ").map_err(|_| std::fmt::Error)?
-                )
+                if exprs.is_empty() {
+                    write!(f, "(CallExpr {expr})")
+                } else {
+                    write!(f, "(CallExpr {expr} ")?;
+                    exprs.print_joined(f, " ")?;
+                    write!(f, ")")
+                }
             }
             Expr::StructLiteral(s, exprs) => {
-                write!(
-                    f,
-                    "(StructLiteralExpr {s}{}{})",
-                    if exprs.is_empty() { "" } else { " " },
-                    exprs.print_joined(" ").map_err(|_| std::fmt::Error)?
-                )
+                if exprs.is_empty() {
+                    write!(f, "(StructLiteralExpr {s})")
+                } else {
+                    write!(f, "(StructLiteralExpr {s} ")?;
+                    exprs.print_joined(f, " ")?;
+                    write!(f, ")")
+                }
             }
             Expr::Dot(expr, s) => {
                 write!(f, "(DotExpr {expr} {s})")
@@ -677,18 +675,14 @@ impl std::fmt::Display for LValue<'_> {
         match self {
             LValue::Var(s) => write!(f, "(VarLValue {s})"),
             LValue::Array(s, args) => {
-                write!(
-                    f,
-                    "(ArrayLValue {s} {})",
-                    args.print_joined(" ").map_err(|_| std::fmt::Error)?
-                )
+                write!(f, "(ArrayLValue {s} ")?;
+                args.print_joined(f, " ")?;
+                write!(f, ")")
             }
             LValue::Tuple(lvs) => {
-                write!(
-                    f,
-                    "(TupleLValue {})",
-                    lvs.print_joined(" ").map_err(|_| std::fmt::Error)?
-                )
+                write!(f, "(TupleLValue ")?;
+                lvs.print_joined(f, " ")?;
+                write!(f, ")")
             }
         }
     }
@@ -756,11 +750,9 @@ impl std::fmt::Display for Type<'_> {
             Type::Bool => write!(f, "(BoolType)"),
             Type::Void => write!(f, "(VoidType)"),
             Type::Tuple(tys) => {
-                write!(
-                    f,
-                    "(TupleType {})",
-                    tys.print_joined(" ").map_err(|_| std::fmt::Error)?
-                )
+                write!(f, "(TupleType ")?;
+                tys.print_joined(f, " ")?;
+                write!(f, ")")
             }
         }
     }
