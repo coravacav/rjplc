@@ -8,12 +8,12 @@ use crate::{
 };
 
 #[cfg(test)]
+use crate::lex::LexImplementation;
+#[cfg(test)]
 use crate::{test_correct, test_solos};
 
 trait Consume<'a>: Sized {
     fn consume(tokens: Parser<'a>) -> ParseResult<'a, Self>;
-    #[allow(dead_code)]
-    fn get_name(&self) -> &'static str;
 }
 
 trait PrintJoined {
@@ -279,10 +279,6 @@ impl<'a> Consume<'a> for Variable<'a> {
 
         parser.complete(Self(s))
     }
-
-    fn get_name(&self) -> &'static str {
-        "variable"
-    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -309,10 +305,6 @@ impl<'a> Consume<'a> for LiteralString<'a> {
 
         parser.skip_one().complete(Self(s))
     }
-
-    fn get_name(&self) -> &'static str {
-        "string literal"
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -330,10 +322,6 @@ impl<'a> Consume<'a> for Field<'a> {
         check!(parser, COLON);
         consume!(parser, Type, ty);
         parser.complete(Self(s, ty))
-    }
-
-    fn get_name(&self) -> &'static str {
-        "field"
     }
 }
 
@@ -426,10 +414,6 @@ impl<'a> Consume<'a> for Cmd<'a> {
             t => miss!(parser, "expected a command keyword (ASSERT | RETURN | LET | ASSERT | PRINT | SHOW | TIME | FN | TYPE | STRUCT), found {t:?}"),
         }
     }
-
-    fn get_name(&self) -> &'static str {
-        "command"
-    }
 }
 
 impl std::fmt::Display for Cmd<'_> {
@@ -509,10 +493,6 @@ impl<'a> Consume<'a> for Statement<'a> {
                 "expected a start of statement (ASSERT | RETURN | LET), found {t:?}"
             ),
         }
-    }
-
-    fn get_name(&self) -> &'static str {
-        "statement"
     }
 }
 
@@ -624,9 +604,7 @@ impl<'a> Consume<'a> for Expr<'a> {
             (parser, Token::VOID) => (parser, Expr::Void),
             (parser, Token::TRUE) => (parser, Expr::True),
             (parser, Token::FALSE) => (parser, Expr::False),
-            (parser, Token::VARIABLE(s)) => 
-                (parser, Expr::Variable(s)),
-            
+            (parser, Token::VARIABLE(s)) => (parser, Expr::Variable(s)),
             (mut parser, Token::LSQUARE) => {
                 consume_list!(parser, RSQUARE, exprs);
                 (parser, Expr::Array(exprs))
@@ -685,10 +663,6 @@ impl<'a> Consume<'a> for Expr<'a> {
 
         parser.complete(expr)
     }
-
-    fn get_name(&self) -> &'static str {
-        "expression"
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -743,10 +717,6 @@ impl<'a> Consume<'a> for LValue<'a> {
         };
 
         parser.complete(lv)
-    }
-
-    fn get_name(&self) -> &'static str {
-        "lvalue"
     }
 }
 
@@ -844,10 +814,6 @@ impl<'a> Consume<'a> for Type<'a> {
 
         parser.complete(ty)
     }
-
-    fn get_name(&self) -> &'static str {
-        "type"
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -869,10 +835,6 @@ impl<'a> Consume<'a> for Binding<'a> {
         check!(parser, COLON);
         consume!(parser, Type, ty);
         parser.complete(Self::Var(lv, ty))
-    }
-
-    fn get_name(&self) -> &'static str {
-        "binding"
     }
 }
 
@@ -926,7 +888,7 @@ fn test_parse_correct() {
     let regex = Regex::new(r"\n\s+").unwrap();
 
     let tester = |file: &str, solution_file: &str| {
-        let (tokens, input_by_token) = crate::lex::lex(file).expect("Lexing should work");
+        let (tokens, input_by_token) = crate::lex::LexNom::lex(file).expect("Lexing should work");
 
         let parsed = match parse(&tokens, &input_by_token, file) {
             Ok(parsed) => parsed,
@@ -960,7 +922,7 @@ fn test_parse_correct() {
 #[test]
 fn test_parse_fails() {
     let tester = |file: Option<&str>| {
-        let Ok((tokens, input_by_tokens)) = crate::lex::lex(file.unwrap()) else {
+        let Ok((tokens, input_by_tokens)) = crate::lex::LexNom::lex(file.unwrap()) else {
             return;
         };
 

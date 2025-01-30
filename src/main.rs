@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use clap::Parser;
 use itertools::Itertools;
+use lex::LexImplementation;
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -69,7 +70,7 @@ fn main() {
         return;
     }
 
-    let (tokens, input_by_token) = match lex::lex(&file) {
+    let (tokens, input_by_token) = match lex::LexLinear::lex(&file) {
         Ok(tokens) => tokens,
         #[allow(unused_variables)]
         Err(e) => {
