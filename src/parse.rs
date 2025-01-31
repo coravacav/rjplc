@@ -511,6 +511,7 @@ pub enum Expr<'a> {
     TupleIndex(Box<Expr<'a>>, Vec<Expr<'a>>),
     StructLiteral(Variable<'a>, Vec<Expr<'a>>),
     Dot(Box<Expr<'a>>, Variable<'a>),
+    Unop(Op, Box<Expr<'a>>),
 }
 
 impl std::fmt::Display for Expr<'_> {
@@ -574,6 +575,9 @@ impl std::fmt::Display for Expr<'_> {
             Expr::Dot(expr, s) => {
                 write!(f, "(DotExpr {expr} {s})")
             }
+            Expr::Unop(op, expr) => {
+                write!(f, "(UnopExpr {op} {expr})")
+            }
         }
     }
 }
@@ -581,6 +585,10 @@ impl std::fmt::Display for Expr<'_> {
 impl<'a> Consume<'a> for Expr<'a> {
     fn consume(parser: Parser<'a>) -> ParseResult<'a, Self> {
         let (mut parser, mut expr) = match parser.next() {
+            (mut parser, Token::OP(op @ (Op::Not | Op::Sub))) => {
+                consume!(parser, Expr, expr);
+                (parser, Expr::Unop(op, Box::new(expr)))
+            }
             (parser, Token::INTVAL(s)) => {
                 if let Ok(i) = s.parse::<i64>() {
                     (parser, Expr::Int(i))
@@ -909,6 +917,7 @@ fn test_parse_correct() {
     test_correct("grader/hw3/ok-fuzzer", tester);
     test_correct("grader/hw4/ok", tester);
     test_correct("grader/hw4/ok-fuzzer", tester);
+    // test_correct("grader/hw5/ok", tester);
 }
 
 #[test]
