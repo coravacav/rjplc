@@ -264,7 +264,7 @@ pub struct Variable<'a>(&'a str);
 
 impl std::fmt::Display for Variable<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
+        f.write_str(self.0)
     }
 }
 
