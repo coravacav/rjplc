@@ -496,8 +496,10 @@ impl<'a> Consume<'a> for Statement<'a> {
 
 #[derive(Debug, Clone)]
 pub enum Expr<'a> {
-    Int(i64),
-    Float(f64),
+    // temporary
+    #[allow(dead_code)]
+    Int(i64, &'a str),
+    Float(f64, &'a str),
     True,
     False,
     Void,
@@ -517,8 +519,27 @@ pub enum Expr<'a> {
 impl std::fmt::Display for Expr<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Expr::Int(i) => write!(f, "(IntExpr {i})"),
-            Expr::Float(fl) => write!(f, "(FloatExpr {:.0})", fl.trunc()),
+            Expr::Int(_, i) => write!(f, "(IntExpr {})", {
+                let i = i.trim_start_matches('0');
+                if i.is_empty() {
+                    "0"
+                } else {
+                    i
+                }
+            }),
+            Expr::Float(fl, s_fl) => s_fl
+                .split_once(".")
+                .map(|(trunc, _)| {
+                    let trunc = trunc.trim_start_matches('0');
+                    if trunc.is_empty() {
+                        write!(f, "(FloatExpr 0)")
+                    } else if trunc.len() > 15 {
+                        write!(f, "(FloatExpr {})", fl.trunc())
+                    } else {
+                        write!(f, "(FloatExpr {})", trunc)
+                    }
+                })
+                .unwrap(),
             Expr::True => write!(f, "(TrueExpr)"),
             Expr::False => write!(f, "(FalseExpr)"),
             Expr::Void => write!(f, "(VoidExpr)"),
@@ -591,7 +612,7 @@ impl<'a> Consume<'a> for Expr<'a> {
             }
             (parser, Token::INTVAL(s)) => {
                 if let Ok(i) = s.parse::<i64>() {
-                    (parser, Expr::Int(i))
+                    (parser, Expr::Int(i, s))
                 } else {
                     miss!(parser, "couldn't parse integer {s}")
                 }
@@ -602,7 +623,7 @@ impl<'a> Consume<'a> for Expr<'a> {
                         miss!(parser, "expected a finite float, found {f}");
                     }
 
-                    (parser, Expr::Float(f))
+                    (parser, Expr::Float(f, s))
                 } else {
                     miss!(parser, "couldn't parse float {s}")
                 }
