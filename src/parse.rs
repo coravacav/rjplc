@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use color_eyre::eyre::{bail, Result};
 use colored::Colorize;
 use itertools::Itertools;
@@ -13,7 +15,7 @@ use crate::lex::LexImplementation;
 use crate::{test_correct, test_solos};
 
 trait Consume<'a>: Sized {
-    fn consume(tokens: Parser<'a>) -> ParseResult<'a, Self>;
+    fn consume(parser: Parser<'a>) -> ParseResult<'a, Self>;
 }
 
 trait PrintJoined {
@@ -191,7 +193,7 @@ impl<'a> Parser<'a> {
     }
 
     /// This function prints the error token text in red and the surrounding text.
-    fn print_error(&self, error_position: usize) {
+    fn print_error(&self, error_position: usize) -> (usize, usize) {
         let current_position = self.current_position;
 
         let [source_pre, semi_valid, error, source_post] = undo_slice_by_cuts(
@@ -217,7 +219,31 @@ impl<'a> Parser<'a> {
                 .rev()
                 .join("\n");
 
-            (source_pre, src_iter.count()..)
+            (source_pre, src_iter.count() + 1..)
+        };
+
+        // find the line and col of the error
+        let (line, column) = {
+            let mut line = 1;
+            let mut column = 0;
+
+            let start_ptr = self.source.as_ptr() as usize;
+            let stop_ptr = self.input_by_token[error_position].as_ptr() as usize;
+
+            for (i, c) in self.source.chars().enumerate() {
+                if start_ptr + i == stop_ptr {
+                    break;
+                }
+
+                if c == '\n' {
+                    line += 1;
+                    column = 0;
+                } else {
+                    column += 1;
+                }
+            }
+
+            (line, column)
         };
 
         let semi_valid = semi_valid
@@ -256,6 +282,8 @@ impl<'a> Parser<'a> {
             );
         }
         println!();
+
+        (line, column)
     }
 }
 
@@ -272,7 +300,7 @@ impl<'a> Consume<'a> for Variable<'a> {
     fn consume(parser: Parser<'a>) -> ParseResult<'a, Self> {
         let (parser, s) = match parser.next() {
             (parser, Token::VARIABLE(s)) => (parser, s),
-            t => miss!(parser, "expected variable, found {t:?}"),
+            (_, t) => miss!(parser, "expected variable, found {}", t),
         };
 
         parser.complete(Self(s))
@@ -863,6 +891,7 @@ pub fn parse<'a>(
     tokens: &'a [Token<'a>],
     input_by_token: &'a [&'a str],
     source: &'a str,
+    path: &'a Path,
 ) -> Result<Vec<Cmd<'a>>> {
     let mut cmds = vec![];
 
@@ -893,9 +922,12 @@ pub fn parse<'a>(
                     break;
                 }
 
-                parser.print_error(err_position);
+                let (line, column) = parser.print_error(err_position);
 
-                bail!("{}", e());
+                bail!(
+                    "{}",
+                    format!("{} at {}:{}:{}", e(), path.display(), line, column)
+                );
             }
         }
     }
@@ -911,7 +943,7 @@ fn test_parse_correct() {
     let tester = |file: &str, solution_file: &str| {
         let (tokens, input_by_token) = crate::lex::LexNom::lex(file).expect("Lexing should work");
 
-        let parsed = match parse(&tokens, &input_by_token, file) {
+        let parsed = match parse(&tokens, &input_by_token, file, Path::new("")) {
             Ok(parsed) => parsed,
             Err(e) => {
                 panic!("Compilation failed {e}");
@@ -943,12 +975,12 @@ fn test_parse_correct() {
 
 #[test]
 fn test_parse_fails() {
-    let tester = |file: Option<&str>| {
-        let Ok((tokens, input_by_tokens)) = crate::lex::LexNom::lex(file.unwrap()) else {
+    let tester = |file: &str, file_path: &Path| {
+        let Ok((tokens, input_by_tokens)) = crate::lex::LexNom::lex(file) else {
             return;
         };
 
-        match parse(&tokens, &input_by_tokens, file.unwrap()) {
+        match parse(&tokens, &input_by_tokens, file, file_path) {
             Ok(parsed) => {
                 println!("{:?}", parsed);
                 panic!("expected parse to fail");

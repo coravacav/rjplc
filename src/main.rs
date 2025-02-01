@@ -7,6 +7,9 @@ use clap::Parser;
 use itertools::Itertools;
 use lex::LexImplementation;
 
+#[cfg(test)]
+use std::{fs, path::Path};
+
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 struct Cli {
@@ -77,7 +80,7 @@ fn main() {
             #[cfg(feature = "homework")]
             println!("Compilation failed");
             #[cfg(not(feature = "homework"))]
-            println!("Compilation failed {e:?}");
+            println!("Compilation failed {e}");
             return;
         }
     };
@@ -99,14 +102,14 @@ fn main() {
         exit(0);
     }
 
-    let parsed = match parse::parse(&tokens, &input_by_token, &file) {
+    let parsed = match parse::parse(&tokens, &input_by_token, &file, &path) {
         Ok(tokens) => tokens,
         #[allow(unused_variables)]
         Err(e) => {
             #[cfg(feature = "homework")]
             println!("Compilation failed");
             #[cfg(not(feature = "homework"))]
-            println!("Compilation failed {e:?}");
+            println!("Compilation failed {e}");
             return;
         }
     };
@@ -269,8 +272,7 @@ fn test_correct(directory: &str, mut tester: impl FnMut(&str, &str)) {
 }
 
 #[cfg(test)]
-fn test_solos(directory: &str, mut tester: impl FnMut(Option<&str>)) {
-    use std::{fs, path::Path};
+fn test_solos(directory: &str, mut tester: impl FnMut(&str, &Path)) {
     let folder = Path::new(directory);
     if !folder.exists() {
         panic!("Could not find {}", folder.display());
@@ -285,10 +287,8 @@ fn test_solos(directory: &str, mut tester: impl FnMut(Option<&str>)) {
     for test_path in test_paths {
         let test_path = test_path.path();
         println!("{}", test_path.display());
-        if let Ok(file) = fs::read_to_string(test_path) {
-            tester(Some(&file));
-        } else {
-            tester(None);
+        if let Ok(file) = fs::read_to_string(&test_path) {
+            tester(&file, &test_path);
         }
     }
 }

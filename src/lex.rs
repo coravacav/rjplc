@@ -682,8 +682,7 @@ fn test_lex_correct() {
 
 #[test]
 fn test_lex_success() {
-    test_solos("grader/hw2/lexer-tests2", |file| {
-        let file = file.unwrap();
+    test_solos("grader/hw2/lexer-tests2", |file, _| {
         let (tokens, captures) = LexNom::lex(file).unwrap();
         let (tokens_linear, captures_linear) = LexLinear::lex(file).unwrap();
 
@@ -694,11 +693,7 @@ fn test_lex_success() {
 
 #[test]
 fn test_lex_fails() {
-    test_solos("grader/hw2/lexer-tests3", |file| {
-        let Some(file) = file else {
-            return;
-        };
-
+    test_solos("grader/hw2/lexer-tests3", |file, _| {
         assert!(LexNom::lex(file).is_err());
         assert!(LexLinear::lex(file).is_err());
     });
