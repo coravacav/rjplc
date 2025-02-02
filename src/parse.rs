@@ -16,8 +16,8 @@ use crate::measure::print_timings;
 #[cfg(test)]
 use crate::{test_correct, test_solos};
 
-trait Consume<'a>: Sized {
-    fn consume(parser: Parser<'a>) -> ParseResult<'a, Self>;
+trait Consume<'a, 'b>: Sized {
+    fn consume(parser: Parser, data: &'b StaticParserData<'a>) -> ParseResult<'a, Self>;
 }
 
 trait PrintJoined {
@@ -47,7 +47,7 @@ enum ParseResult<'a, T> {
         error_message: Box<dyn Fn() -> String + 'a>,
         position: usize,
     },
-    Parsed(Parser<'a>, T),
+    Parsed(Parser, T),
 }
 
 macro_rules! miss {
@@ -57,8 +57,8 @@ macro_rules! miss {
 }
 
 macro_rules! consume {
-    ($parser:ident, $type:ty, $outvar:ident) => {
-        let (advanced_parser, $outvar) = match <$type>::consume($parser) {
+    ($parser:ident, $data:ident, $type:ty, $outvar:ident) => {
+        let (advanced_parser, $outvar) = match <$type>::consume($parser, $data) {
             ParseResult::Parsed(parser, t) => {
                 debug_assert_ne!($parser.current_position, parser.current_position);
                 (parser, t)
@@ -89,22 +89,23 @@ macro_rules! consume {
     };
 }
 
-fn consume_list<'a, 'b, T: Consume<'a> + std::fmt::Debug>(
-    mut parser: Parser<'a>,
+fn consume_list<'a, 'b, T: Consume<'a, 'b> + std::fmt::Debug>(
+    mut parser: Parser,
+    data: &'b StaticParserData<'a>,
     end_token: Token<'a>,
     delimeter: Token<'a>,
     delimeter_terminated: bool,
 ) -> ParseResult<'a, Vec<T>> {
     let mut list = vec![];
     loop {
-        if let ParseResult::Parsed(parser, ()) = parser.check_skip(end_token) {
+        if let ParseResult::Parsed(parser, ()) = parser.check_skip(data, end_token) {
             return parser.complete(list);
         }
 
-        consume!(parser, T, t);
+        consume!(parser, data, T, t);
         list.push(t);
 
-        match parser.first() {
+        match parser.first(data) {
             t if t == delimeter => parser = parser.skip_one(),
             t if !delimeter_terminated && t == end_token => {
                 parser = parser.skip_one();
@@ -120,9 +121,10 @@ fn consume_list<'a, 'b, T: Consume<'a> + std::fmt::Debug>(
 }
 
 macro_rules! consume_list {
-    ($parser:ident, $end_token:tt, $delimeter:tt, $delimeter_terminated:expr, $outvar:ident) => {
+    ($parser:ident, $data:ident, $end_token:tt, $delimeter:tt, $delimeter_terminated:expr, $outvar:ident) => {
         let (advanced_parser, $outvar) = match consume_list(
             $parser,
+            $data,
             Token::$end_token,
             Token::$delimeter,
             $delimeter_terminated,
@@ -155,17 +157,17 @@ macro_rules! consume_list {
 
         $parser = advanced_parser;
     };
-    ($parser:ident, $end_token:tt, $delimeter:tt, $outvar:ident) => {
-        consume_list!($parser, $end_token, $delimeter, false, $outvar)
+    ($parser:ident, $data:ident, $end_token:tt, $delimeter:tt, $outvar:ident) => {
+        consume_list!($parser, $data, $end_token, $delimeter, false, $outvar)
     };
-    ($parser:ident, $end_token:tt, $outvar:ident) => {
-        consume_list!($parser, $end_token, COMMA, false, $outvar)
+    ($parser:ident, $data:ident, $end_token:tt, $outvar:ident) => {
+        consume_list!($parser, $data, $end_token, COMMA, false, $outvar)
     };
 }
 
 macro_rules! check {
-    ($parser:ident, $token:tt) => {
-        let advanced_parser = match $parser.check_skip(Token::$token) {
+    ($parser:ident, $data:ident, $token:tt) => {
+        let advanced_parser = match $parser.check_skip($data, Token::$token) {
             ParseResult::Parsed(parser, _) => (parser),
             ParseResult::NotParsed {
                 error_message,
@@ -194,17 +196,20 @@ macro_rules! check {
 }
 
 macro_rules! localize_error {
-    ($parser:ident, $ty:ty, $function_body:expr) => {{
-        fn inner_func<'a>(mut $parser: Parser<'a>) -> ParseResult<'a, $ty> {
+    ($parser:ident, $data:ident, $ty:ty, $function_body:expr) => {{
+        fn inner_func<'a, 'b>(
+            mut $parser: Parser,
+            $data: &'b StaticParserData<'a>,
+        ) -> ParseResult<'a, $ty> {
             $function_body
         }
 
-        match inner_func($parser) {
+        match inner_func($parser, $data) {
             ParseResult::NotParsed {
                 error_message,
                 position,
             } if position != $parser.current_position => {
-                let (line, column) = $parser.print_error(position);
+                let (line, column) = $parser.print_error($data, position);
                 ParseResult::NotParsedErrorPrinted {
                     error_message,
                     line,
@@ -216,27 +221,23 @@ macro_rules! localize_error {
     }};
 }
 
-#[derive(Clone, Copy)]
-struct Parser<'a> {
-    original_tokens: &'a [Token<'a>],
+#[derive(Clone, Copy, PartialEq)]
+struct Parser {
     current_position: usize,
+}
+
+struct StaticParserData<'a> {
+    original_tokens: &'a [Token<'a>],
     input_by_token: &'a [&'a str],
     source: &'a str,
-    // error_from: Option<NonZeroUsize>,
 }
 
-impl PartialEq for Parser<'_> {
-    fn eq(&self, other: &Self) -> bool {
-        self.current_position == other.current_position
-    }
-}
-
-impl<'a> Parser<'a> {
-    fn complete<T>(&self, t: T) -> ParseResult<'a, T> {
-        ParseResult::Parsed(*self, t)
+impl<'a, 'b> Parser {
+    fn complete<T>(self, t: T) -> ParseResult<'a, T> {
+        ParseResult::Parsed(self, t)
     }
 
-    fn miss<T>(&self, report: Box<dyn Fn() -> String + 'a>) -> ParseResult<'a, T> {
+    fn miss<T>(self, report: Box<dyn Fn() -> String + 'a>) -> ParseResult<'a, T> {
         ParseResult::NotParsed {
             error_message: report,
             position: self.current_position,
@@ -249,50 +250,49 @@ impl<'a> Parser<'a> {
         self
     }
 
-    fn check_skip(self, token: Token<'a>) -> ParseResult<'a, ()> {
+    fn check_skip(self, data: &'b StaticParserData<'a>, token: Token<'a>) -> ParseResult<'a, ()> {
         debug_assert_ne!(token, Token::END_OF_FILE);
-        if self.check_one(token) {
+        if self.check_one(data, token) {
             ParseResult::Parsed(self.skip_one(), ())
         } else {
+            let first = self.first(data);
             ParseResult::NotParsed {
-                error_message: Box::new(move || {
-                    format!("expected {token:?}, found {:?}", self.first())
-                }),
+                error_message: Box::new(move || format!("expected {token:?}, found {first:?}")),
                 position: self.current_position,
             }
         }
     }
 
-    fn check_one(&self, token: Token<'a>) -> bool {
-        self.first() == token
+    fn check_one(self, data: &StaticParserData<'a>, token: Token<'a>) -> bool {
+        self.first(data) == token
     }
 
-    fn first(&self) -> Token<'a> {
-        debug_assert!(self.original_tokens.get(self.current_position).is_some());
+    fn first(self, data: &StaticParserData<'a>) -> Token<'a> {
+        debug_assert!(data.original_tokens.get(self.current_position).is_some());
         // SAFETY: EOF is always at the end and we never check for EOF
-        unsafe { *self.original_tokens.get_unchecked(self.current_position) }
+        unsafe { *data.original_tokens.get_unchecked(self.current_position) }
     }
 
-    fn next(self) -> (Self, Token<'a>) {
-        let next = self.first();
+    fn next(self, data: &StaticParserData<'a>) -> (Self, Token<'a>) {
+        let next = self.first(data);
         (self.skip_one(), next)
     }
 
-    fn is_empty(&self) -> bool {
-        self.current_position == self.original_tokens.len()
+    fn is_empty(self, data: &StaticParserData<'a>) -> bool {
+        self.current_position == data.original_tokens.len()
     }
 
     /// This function prints the error token text in red and the surrounding text.
-    fn print_error(&self, error_position: usize) -> (usize, usize) {
+    fn print_error(&self, data: &'b StaticParserData<'a>, error_position: usize) -> (usize, usize) {
         let current_position = self.current_position;
 
         let [source_pre, semi_valid, error, source_post] = undo_slice_by_cuts(
-            self.source,
+            data.source,
             [
                 UndoSliceSelection::Boundless,
-                UndoSliceSelection::Beginning(self.input_by_token[current_position]),
-                UndoSliceSelection::Beginning(self.input_by_token[error_position]),
-                UndoSliceSelection::End(self.input_by_token[error_position]),
+                UndoSliceSelection::Beginning(data.input_by_token[current_position]),
+                UndoSliceSelection::Beginning(data.input_by_token[error_position]),
+                UndoSliceSelection::End(data.input_by_token[error_position]),
                 UndoSliceSelection::Boundless,
             ],
         );
@@ -317,10 +317,10 @@ impl<'a> Parser<'a> {
             let mut line = 1;
             let mut column = 0;
 
-            let start_ptr = self.source.as_ptr() as usize;
-            let stop_ptr = self.input_by_token[error_position].as_ptr() as usize;
+            let start_ptr = data.source.as_ptr() as usize;
+            let stop_ptr = data.input_by_token[error_position].as_ptr() as usize;
 
-            for (i, c) in self.source.chars().enumerate() {
+            for (i, c) in data.source.chars().enumerate() {
                 if start_ptr + i == stop_ptr {
                     break;
                 }
@@ -390,10 +390,10 @@ impl std::fmt::Display for Variable<'_> {
     }
 }
 
-impl<'a> Consume<'a> for Variable<'a> {
-    fn consume(parser: Parser<'a>) -> ParseResult<'a, Self> {
+impl<'a, 'b> Consume<'a, 'b> for Variable<'a> {
+    fn consume(parser: Parser, data: &'b StaticParserData<'a>) -> ParseResult<'a, Self> {
         measure!("variable");
-        let (parser, s) = match parser.next() {
+        let (parser, s) = match parser.next(data) {
             (parser, Token::VARIABLE(s)) => (parser, s),
             (_, t) => miss!(parser, "expected variable, found {}", t),
         };
@@ -417,10 +417,10 @@ impl std::fmt::Display for LiteralString<'_> {
     }
 }
 
-impl<'a> Consume<'a> for LiteralString<'a> {
-    fn consume(parser: Parser<'a>) -> ParseResult<'a, Self> {
+impl<'a, 'b> Consume<'a, 'b> for LiteralString<'a> {
+    fn consume(parser: Parser, data: &'b StaticParserData<'a>) -> ParseResult<'a, Self> {
         measure!("literal_string");
-        let s = match parser.first() {
+        let s = match parser.first(data) {
             Token::STRING(s) => s,
             t => miss!(parser, "expected string, found {t:?}"),
         };
@@ -438,13 +438,13 @@ impl std::fmt::Display for Field<'_> {
     }
 }
 
-impl<'a> Consume<'a> for Field<'a> {
-    fn consume(parser: Parser<'a>) -> ParseResult<'a, Self> {
+impl<'a, 'b> Consume<'a, 'b> for Field<'a> {
+    fn consume(parser: Parser, data: &'b StaticParserData<'a>) -> ParseResult<'a, Self> {
         measure!("field");
-        localize_error!(parser, Field<'a>, {
-            consume!(parser, Variable, s);
-            check!(parser, COLON);
-            consume!(parser, Type, ty);
+        localize_error!(parser, data, Field<'a>, {
+            consume!(parser, data, Variable, s);
+            check!(parser, data, COLON);
+            consume!(parser, data, Type, ty);
             parser.complete(Field(s, ty))
         })
     }
@@ -464,77 +464,77 @@ pub enum Cmd<'a> {
     Struct(Variable<'a>, Vec<Field<'a>>),
 }
 
-impl<'a> Consume<'a> for Cmd<'a> {
-    fn consume(parser: Parser<'a>) -> ParseResult<'a, Self> {
+impl<'a, 'b> Consume<'a, 'b> for Cmd<'a> {
+    fn consume(parser: Parser, data: &'b StaticParserData<'a>) -> ParseResult<'a, Self> {
         measure!("cmd");
-        match parser.next() {
+        match parser.next(data) {
             (mut parser, Token::READ) => {
-                check!(parser, IMAGE);
-                consume!(parser, LiteralString, s);
-                check!(parser, TO);
-                consume!(parser, LValue, lvalue);
-                check!(parser, NEWLINE);
+                check!(parser, data,IMAGE);
+                consume!(parser, data,LiteralString, s);
+                check!(parser, data,TO);
+                consume!(parser, data,LValue, lvalue);
+                check!(parser, data,NEWLINE);
                 parser.complete(Self::Read(s, lvalue))
             }
             (mut parser, Token::TIME) => {
-                consume!(parser, Cmd, cmd);
+                consume!(parser, data,Cmd, cmd);
                 parser.complete(Self::Time(Box::new(cmd)))
             }
             (mut parser, Token::LET) => {
-                consume!(parser, LValue, lvalue);
-                check!(parser, EQUALS);
-                consume!(parser, Expr, expr);
-                check!(parser, NEWLINE);
+                consume!(parser, data,LValue, lvalue);
+                check!(parser, data,EQUALS);
+                consume!(parser, data,Expr, expr);
+                check!(parser, data,NEWLINE);
                 parser.complete(Self::Let(lvalue, expr))
             }
             (mut parser, Token::ASSERT) => {
-                consume!(parser, Expr, expr);
-                check!(parser, COMMA);
-                consume!(parser, LiteralString, s);
-                check!(parser, NEWLINE);
+                consume!(parser, data,Expr, expr);
+                check!(parser, data,COMMA);
+                consume!(parser, data,LiteralString, s);
+                check!(parser, data,NEWLINE);
                 parser.complete(Self::Assert(expr, s))
             }
             (mut parser, Token::SHOW) => {
-                consume!(parser, Expr, expr);
-                check!(parser, NEWLINE);
+                consume!(parser, data,Expr, expr);
+                check!(parser, data,NEWLINE);
                 parser.complete(Self::Show(expr))
             }
             (mut parser, Token::WRITE) => {
-                check!(parser, IMAGE);
-                consume!(parser, Expr, expr);
-                check!(parser, TO);
-                consume!(parser, LiteralString, s);
-                check!(parser, NEWLINE);
+                check!(parser, data,IMAGE);
+                consume!(parser, data,Expr, expr);
+                check!(parser, data,TO);
+                consume!(parser, data,LiteralString, s);
+                check!(parser, data,NEWLINE);
                 parser.complete(Self::Write(expr, s))
             }
             (mut parser, Token::PRINT) => {
-                consume!(parser, LiteralString, s);
-                check!(parser, NEWLINE);
+                consume!(parser, data,LiteralString, s);
+                check!(parser, data,NEWLINE);
                 parser.complete(Self::Print(s))
             }
             (mut parser, Token::FN) => {
-                consume!(parser, Variable, v);
-                check!(parser, LPAREN);
-                consume_list!(parser, RPAREN, bindings);
-                check!(parser, COLON);
-                consume!(parser, Type, ty);
-                check!(parser, LCURLY);
-                check!(parser, NEWLINE);
-                consume_list!(parser, RCURLY, NEWLINE, true, statements);
+                consume!(parser, data,Variable, v);
+                check!(parser, data,LPAREN);
+                consume_list!(parser, data,RPAREN, bindings);
+                check!(parser, data,COLON);
+                consume!(parser, data,Type, ty);
+                check!(parser, data,LCURLY);
+                check!(parser, data,NEWLINE);
+                consume_list!(parser, data,RCURLY, NEWLINE, true, statements);
                 parser.complete(Self::Fn(v, bindings, ty, statements))
             }
             (mut parser, Token::TYPE) => {
-                consume!(parser, Variable, v);
-                check!(parser, EQUALS);
-                consume!(parser, Type, ty);
-                check!(parser, NEWLINE);
+                consume!(parser, data,Variable, v);
+                check!(parser, data,EQUALS);
+                consume!(parser, data,Type, ty);
+                check!(parser, data,NEWLINE);
                 parser.complete(Self::Type(v, ty))
             }
             (mut parser, Token::STRUCT) => {
-                consume!(parser, Variable, v);
-                check!(parser, LCURLY);
-                check!(parser, NEWLINE);
-                consume_list!(parser, RCURLY, NEWLINE, fields);
+                consume!(parser, data,Variable, v);
+                check!(parser, data,LCURLY);
+                check!(parser, data,NEWLINE);
+                consume_list!(parser, data,RCURLY, NEWLINE, fields);
                 parser.complete(Self::Struct(v, fields))
             }
             (_, t) => miss!(parser, "expected a command keyword (ASSERT | RETURN | LET | ASSERT | PRINT | SHOW | TIME | FN | TYPE | STRUCT), found {t:?}"),
@@ -592,28 +592,28 @@ impl std::fmt::Display for Statement<'_> {
     }
 }
 
-impl<'a> Consume<'a> for Statement<'a> {
-    fn consume(parser: Parser<'a>) -> ParseResult<'a, Self> {
+impl<'a, 'b> Consume<'a, 'b> for Statement<'a> {
+    fn consume(parser: Parser, data: &'b StaticParserData<'a>) -> ParseResult<'a, Self> {
         measure!("statement");
-        localize_error!(parser, Statement<'a>, {
-            match parser.first() {
+        localize_error!(parser, data, Statement<'a>, {
+            match parser.first(data) {
                 Token::ASSERT => {
                     parser = parser.skip_one();
-                    consume!(parser, Expr, expr);
-                    check!(parser, COMMA);
-                    consume!(parser, LiteralString, msg);
+                    consume!(parser, data, Expr, expr);
+                    check!(parser, data, COMMA);
+                    consume!(parser, data, LiteralString, msg);
                     parser.complete(Statement::Assert(expr, msg))
                 }
                 Token::RETURN => {
                     parser = parser.skip_one();
-                    consume!(parser, Expr, expr);
+                    consume!(parser, data, Expr, expr);
                     parser.complete(Statement::Return(expr))
                 }
                 Token::LET => {
                     parser = parser.skip_one();
-                    consume!(parser, LValue, lvalue);
-                    check!(parser, EQUALS);
-                    consume!(parser, Expr, expr);
+                    consume!(parser, data, LValue, lvalue);
+                    check!(parser, data, EQUALS);
+                    consume!(parser, data, Expr, expr);
                     parser.complete(Statement::Let(lvalue, expr))
                 }
                 t => miss!(
@@ -734,12 +734,12 @@ impl std::fmt::Display for Expr<'_> {
     }
 }
 
-impl<'a> Consume<'a> for Expr<'a> {
-    fn consume(parser: Parser<'a>) -> ParseResult<'a, Self> {
+impl<'a, 'b> Consume<'a, 'b> for Expr<'a> {
+    fn consume(parser: Parser, data: &'b StaticParserData<'a>) -> ParseResult<'a, Self> {
         measure!("expr");
-        let (mut parser, mut expr) = match parser.next() {
+        let (mut parser, mut expr) = match parser.next(data) {
             (mut parser, Token::OP(op @ (Op::Not | Op::Sub))) => {
-                consume!(parser, Expr, expr);
+                consume!(parser, data,Expr, expr);
                 (parser, Expr::Unop(op, Box::new(expr)))
             }
             (parser, Token::INTVAL(s)) => {
@@ -765,16 +765,16 @@ impl<'a> Consume<'a> for Expr<'a> {
             (parser, Token::FALSE) => (parser, Expr::False),
             (parser, Token::VARIABLE(s)) => (parser, Expr::Variable(s)),
             (mut parser, Token::LSQUARE) => {
-                consume_list!(parser, RSQUARE, exprs);
+                consume_list!(parser, data,RSQUARE, exprs);
                 (parser, Expr::Array(exprs))
             }
             (mut parser, Token::LPAREN) => {
-                consume!(parser, Expr, expr);
-                check!(parser, RPAREN);
+                consume!(parser, data,Expr, expr);
+                check!(parser, data,RPAREN);
                 (parser, expr)
             }
             (mut parser, Token::LCURLY) => {
-                consume_list!(parser, RCURLY, exprs);
+                consume_list!(parser, data,RCURLY, exprs);
                 (parser, Expr::Tuple(exprs))
             }
             (_, t) => miss!(parser,
@@ -783,25 +783,25 @@ impl<'a> Consume<'a> for Expr<'a> {
         };
 
         let (parser, expr) = loop {
-            let (rem_parser, new_expr) = match (parser.next(), &expr) {
+            let (rem_parser, new_expr) = match (parser.next(data), &expr) {
                 ((mut parser, Token::LSQUARE), _) => {
-                    consume_list!(parser, RSQUARE, exprs);
+                    consume_list!(parser, data, RSQUARE, exprs);
                     (parser, Expr::ArrayIndex(Box::new(expr), exprs))
                 }
                 ((mut parser, Token::LPAREN), Expr::Variable(s)) => {
-                    consume_list!(parser, RPAREN, exprs);
+                    consume_list!(parser, data, RPAREN, exprs);
                     (parser, Expr::Call(Variable(s), exprs))
                 }
                 ((mut parser, Token::LCURLY), Expr::Variable(s)) => {
-                    consume_list!(parser, RCURLY, exprs);
+                    consume_list!(parser, data, RCURLY, exprs);
                     (parser, Expr::StructLiteral(Variable(s), exprs))
                 }
                 ((mut parser, Token::LCURLY), _) => {
-                    consume_list!(parser, RCURLY, exprs);
+                    consume_list!(parser, data, RCURLY, exprs);
                     (parser, Expr::TupleIndex(Box::new(expr), exprs))
                 }
                 ((mut parser, Token::DOT), _) => {
-                    consume!(parser, Variable, var);
+                    consume!(parser, data, Variable, var);
                     (parser, Expr::Dot(Box::new(expr), var))
                 }
                 _ => break (parser, expr),
@@ -849,13 +849,13 @@ impl std::fmt::Display for LValue<'_> {
     }
 }
 
-impl<'a> Consume<'a> for LValue<'a> {
-    fn consume(parser: Parser<'a>) -> ParseResult<'a, Self> {
+impl<'a, 'b> Consume<'a, 'b> for LValue<'a> {
+    fn consume(parser: Parser, data: &'b StaticParserData<'a>) -> ParseResult<'a, Self> {
         measure!("lvalue");
-        let (parser, lv) = match parser.next() {
+        let (parser, lv) = match parser.next(data) {
             (parser, Token::VARIABLE(s)) => (parser, LValue::Var(Variable(s))),
             (mut parser, Token::LCURLY) => {
-                consume_list!(parser, RCURLY, lvs);
+                consume_list!(parser, data, RCURLY, lvs);
                 (parser, LValue::Tuple(lvs))
             }
             (_, t) => miss!(
@@ -864,9 +864,9 @@ impl<'a> Consume<'a> for LValue<'a> {
             ),
         };
 
-        let (parser, lv) = match (parser.next(), &lv) {
+        let (parser, lv) = match (parser.next(data), &lv) {
             ((mut parser, Token::LSQUARE), &LValue::Var(s)) => {
-                consume_list!(parser, RSQUARE, args);
+                consume_list!(parser, data, RSQUARE, args);
                 (parser, LValue::Array(s, args))
             }
             _ => (parser, lv),
@@ -920,17 +920,17 @@ impl std::fmt::Display for Type<'_> {
     }
 }
 
-impl<'a> Consume<'a> for Type<'a> {
-    fn consume(parser: Parser<'a>) -> ParseResult<'a, Self> {
+impl<'a, 'b> Consume<'a, 'b> for Type<'a> {
+    fn consume(parser: Parser, data: &'b StaticParserData<'a>) -> ParseResult<'a, Self> {
         measure!("type");
-        let (mut parser, mut ty) = match parser.next() {
+        let (mut parser, mut ty) = match parser.next(data) {
             (parser, Token::VARIABLE(s)) => (parser, Type::Struct(s)),
             (parser, Token::INT) => (parser, Type::Int),
             (parser, Token::BOOL) => (parser, Type::Bool),
             (parser, Token::VOID) => (parser, Type::Void),
             (parser, Token::FLOAT) => (parser, Type::Float),
             (mut parser, Token::LCURLY) => {
-                consume_list!(parser, RCURLY, tys);
+                consume_list!(parser, data, RCURLY, tys);
                 (parser, Type::Tuple(tys))
             }
             (_, t) => miss!(
@@ -941,14 +941,14 @@ impl<'a> Consume<'a> for Type<'a> {
 
         #[allow(clippy::while_let_loop)]
         loop {
-            match (parser.first(), &ty) {
+            match (parser.first(data), &ty) {
                 (Token::LSQUARE, _) => {
                     parser = parser.skip_one();
 
                     let mut depth: u8 = 1;
 
                     loop {
-                        match parser.next() {
+                        match parser.next(data) {
                             (advanced_parser, Token::RSQUARE) => {
                                 parser = advanced_parser;
                                 break;
@@ -984,13 +984,13 @@ impl std::fmt::Display for Binding<'_> {
     }
 }
 
-impl<'a> Consume<'a> for Binding<'a> {
-    fn consume(parser: Parser<'a>) -> ParseResult<'a, Self> {
+impl<'a, 'b> Consume<'a, 'b> for Binding<'a> {
+    fn consume(parser: Parser, data: &'b StaticParserData<'a>) -> ParseResult<'a, Self> {
         measure!("binding");
-        localize_error!(parser, Binding<'a>, {
-            consume!(parser, LValue, lv);
-            check!(parser, COLON);
-            consume!(parser, Type, ty);
+        localize_error!(parser, data, Binding<'a>, {
+            consume!(parser, data, LValue, lv);
+            check!(parser, data, COLON);
+            consume!(parser, data, Type, ty);
             parser.complete(Binding::Var(lv, ty))
         })
     }
@@ -1006,36 +1006,44 @@ pub fn parse<'a>(
     let mut cmds = vec![];
 
     let mut parser = Parser {
-        original_tokens: tokens,
         current_position: 0,
+    };
+
+    let data = StaticParserData {
+        original_tokens: tokens,
         input_by_token,
         source,
     };
 
-    while !parser.is_empty() {
-        let cmd = Cmd::consume(parser);
+    // let data = unsafe { &*std::ptr::from_ref::<StaticParserData<'a>>(&data) };
+    let data = &data;
+
+    while !parser.is_empty(data) {
+        let cmd = Cmd::consume(parser, data);
 
         match cmd {
             ParseResult::Parsed(moved_parser, cmd) => {
                 // debug_assert_ne!(moved_parser, parser);
                 parser = moved_parser;
-                // parser.successfully_parsed.set(0);
+
+                let cmd: Cmd<'a> = cmd;
+
                 cmds.push(cmd);
             }
             ParseResult::NotParsed {
                 error_message: e,
                 position: err_position,
             } => {
-                if let Token::NEWLINE = parser.first() {
+                if let Token::NEWLINE = parser.first(data) {
                     parser = parser.skip_one();
                     continue;
                 }
 
-                if let Token::END_OF_FILE = parser.first() {
+                if let Token::END_OF_FILE = parser.first(data) {
                     break;
                 }
 
-                let (line, column) = parser.print_error(err_position);
+                let (line, column) = parser.print_error(data, err_position);
 
                 bail!(
                     "{}",
@@ -1047,12 +1055,12 @@ pub fn parse<'a>(
                 line,
                 column,
             } => {
-                if let Token::NEWLINE = parser.first() {
+                if let Token::NEWLINE = parser.first(data) {
                     parser = parser.skip_one();
                     continue;
                 }
 
-                if let Token::END_OF_FILE = parser.first() {
+                if let Token::END_OF_FILE = parser.first(data) {
                     break;
                 }
 
