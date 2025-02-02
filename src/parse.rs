@@ -1030,10 +1030,7 @@ pub fn parse<'a>(
 
                 cmds.push(cmd);
             }
-            ParseResult::NotParsed {
-                error_message: e,
-                position: err_position,
-            } => {
+            pr => {
                 if let Token::NEWLINE = parser.first(data) {
                     parser = parser.skip_one();
                     continue;
@@ -1043,31 +1040,26 @@ pub fn parse<'a>(
                     break;
                 }
 
-                let (line, column) = parser.print_error(data, err_position);
+                let (e, line, column) = match pr {
+                    ParseResult::NotParsed {
+                        error_message: e,
+                        position: err_position,
+                    } => {
+                        let (line, column) = parser.print_error(data, err_position);
+                        (e, line, column)
+                    }
+                    ParseResult::NotParsedErrorPrinted {
+                        error_message: e,
+                        line,
+                        column,
+                    } => (e, line, column),
+                    ParseResult::Parsed(..) => unreachable!(),
+                };
 
                 bail!(
                     "{}",
                     format!("{} at {}:{}:{}", e(), path.display(), line, column)
                 );
-            }
-            ParseResult::NotParsedErrorPrinted {
-                error_message: e,
-                line,
-                column,
-            } => {
-                if let Token::NEWLINE = parser.first(data) {
-                    parser = parser.skip_one();
-                    continue;
-                }
-
-                if let Token::END_OF_FILE = parser.first(data) {
-                    break;
-                }
-
-                bail!(
-                    "{}",
-                    format!("{} at {}:{}:{}", e(), path.display(), line, column)
-                )
             }
         }
     }
