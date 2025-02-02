@@ -1,19 +1,22 @@
 #![deny(clippy::pedantic)]
 
 mod lex;
+mod measure;
 mod parse;
 
-use std::{io::stdout, path::PathBuf, process::exit};
+use std::{io::stdout, path::PathBuf, process::exit, time::Instant};
 
 use clap::Parser;
 use itertools::Itertools;
 use lex::LexImplementation;
+use measure::print_timings;
 
 #[cfg(test)]
 use std::{fs, path::Path};
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
+#[allow(clippy::struct_excessive_bools)]
 struct Cli {
     /// Filename
     path: PathBuf,
@@ -26,15 +29,22 @@ struct Cli {
 
     #[arg(short)]
     typecheck: bool,
+
+    #[arg(short)]
+    quiet: bool,
 }
 
+#[allow(clippy::too_many_lines)]
 fn main() {
+    let now = Instant::now();
+
     #[allow(unused_mut)]
     let Cli {
         path,
         mut lex,
         mut parse,
         mut typecheck,
+        quiet,
     } = Cli::parse();
 
     #[cfg(feature = "homework")]
@@ -83,24 +93,34 @@ fn main() {
             println!("Compilation failed");
             #[cfg(not(feature = "homework"))]
             println!("Compilation failed {e}");
+
+            print_timings();
+
             return;
         }
     };
 
     if !parse {
-        use std::fmt::Write;
+        let output = {
+            measure!("make output");
+            use std::fmt::Write;
+            let mut output = String::new();
 
-        let mut output = String::new();
+            for token in &tokens {
+                writeln!(output, "{token}").unwrap();
+            }
+            writeln!(output, "Compilation succeeded").unwrap();
 
-        for token in &tokens {
-            writeln!(output, "{token}").unwrap();
-        }
-        writeln!(output, "Compilation succeeded").unwrap();
+            output
+        };
 
-        {
+        if !quiet {
+            measure!("write output");
             use std::io::Write;
             stdout().write_all(output.as_bytes()).unwrap();
         }
+
+        print_timings();
 
         exit(0);
     }
@@ -113,23 +133,39 @@ fn main() {
             println!("Compilation failed");
             #[cfg(not(feature = "homework"))]
             println!("Compilation failed {e}");
+
+            print_timings();
+
             return;
         }
     };
 
     if !typecheck {
-        use std::fmt::Write;
-        let mut output = String::new();
+        let output = {
+            measure!("make output");
+            use std::fmt::Write;
+            let mut output = String::new();
 
-        for parsed in &parsed {
-            writeln!(output, "{parsed}").unwrap();
-        }
-        writeln!(output, "Compilation succeeded").unwrap();
+            for parsed in &parsed {
+                writeln!(output, "{parsed}").unwrap();
+            }
+            writeln!(output, "Compilation succeeded").unwrap();
 
-        {
+            output
+        };
+
+        if !quiet {
+            measure!("write output");
             use std::io::Write;
             stdout().write_all(output.as_bytes()).unwrap();
         }
+
+        print_timings();
+
+        println!(
+            "Compilation took {}",
+            dur::Duration::from_std(now.elapsed())
+        );
 
         exit(0);
     }

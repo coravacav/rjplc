@@ -6,7 +6,7 @@ use itertools::Itertools;
 
 use crate::{
     lex::{Op, Token},
-    undo_slice_by_cuts, UndoSliceSelection,
+    measure, undo_slice_by_cuts, UndoSliceSelection,
 };
 
 #[cfg(test)]
@@ -386,6 +386,7 @@ impl std::fmt::Display for Variable<'_> {
 
 impl<'a> Consume<'a> for Variable<'a> {
     fn consume(parser: Parser<'a>) -> ParseResult<'a, Self> {
+        measure!("variable");
         let (parser, s) = match parser.next() {
             (parser, Token::VARIABLE(s)) => (parser, s),
             (_, t) => miss!(parser, "expected variable, found {}", t),
@@ -412,6 +413,7 @@ impl std::fmt::Display for LiteralString<'_> {
 
 impl<'a> Consume<'a> for LiteralString<'a> {
     fn consume(parser: Parser<'a>) -> ParseResult<'a, Self> {
+        measure!("literal_string");
         let s = match parser.first() {
             Token::STRING(s) => s,
             t => miss!(parser, "expected string, found {t:?}"),
@@ -432,6 +434,7 @@ impl std::fmt::Display for Field<'_> {
 
 impl<'a> Consume<'a> for Field<'a> {
     fn consume(parser: Parser<'a>) -> ParseResult<'a, Self> {
+        measure!("field");
         localize_error!(parser, Field<'a>, {
             consume!(parser, Variable, s);
             check!(parser, COLON);
@@ -457,6 +460,7 @@ pub enum Cmd<'a> {
 
 impl<'a> Consume<'a> for Cmd<'a> {
     fn consume(parser: Parser<'a>) -> ParseResult<'a, Self> {
+        measure!("cmd");
         match parser.next() {
             (mut parser, Token::READ) => {
                 check!(parser, IMAGE);
@@ -584,6 +588,7 @@ impl std::fmt::Display for Statement<'_> {
 
 impl<'a> Consume<'a> for Statement<'a> {
     fn consume(parser: Parser<'a>) -> ParseResult<'a, Self> {
+        measure!("statement");
         localize_error!(parser, Statement<'a>, {
             match parser.first() {
                 Token::ASSERT => {
@@ -725,6 +730,7 @@ impl std::fmt::Display for Expr<'_> {
 
 impl<'a> Consume<'a> for Expr<'a> {
     fn consume(parser: Parser<'a>) -> ParseResult<'a, Self> {
+        measure!("expr");
         let (mut parser, mut expr) = match parser.next() {
             (mut parser, Token::OP(op @ (Op::Not | Op::Sub))) => {
                 consume!(parser, Expr, expr);
@@ -839,6 +845,7 @@ impl std::fmt::Display for LValue<'_> {
 
 impl<'a> Consume<'a> for LValue<'a> {
     fn consume(parser: Parser<'a>) -> ParseResult<'a, Self> {
+        measure!("lvalue");
         let (parser, lv) = match parser.next() {
             (parser, Token::VARIABLE(s)) => (parser, LValue::Var(Variable(s))),
             (mut parser, Token::LCURLY) => {
@@ -909,6 +916,7 @@ impl std::fmt::Display for Type<'_> {
 
 impl<'a> Consume<'a> for Type<'a> {
     fn consume(parser: Parser<'a>) -> ParseResult<'a, Self> {
+        measure!("type");
         let (mut parser, mut ty) = match parser.next() {
             (parser, Token::VARIABLE(s)) => (parser, Type::Struct(s)),
             (parser, Token::INT) => (parser, Type::Int),
@@ -972,6 +980,7 @@ impl std::fmt::Display for Binding<'_> {
 
 impl<'a> Consume<'a> for Binding<'a> {
     fn consume(parser: Parser<'a>) -> ParseResult<'a, Self> {
+        measure!("binding");
         localize_error!(parser, Binding<'a>, {
             consume!(parser, LValue, lv);
             check!(parser, COLON);
@@ -987,6 +996,7 @@ pub fn parse<'a>(
     source: &'a str,
     path: &'a Path,
 ) -> Result<Vec<Cmd<'a>>> {
+    measure!("parse");
     let mut cmds = vec![];
 
     let mut parser = Parser {

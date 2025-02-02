@@ -9,6 +9,7 @@ use nom::{
     Finish,
 };
 
+use crate::measure;
 #[cfg(test)]
 use crate::{test_correct, test_solos};
 
@@ -311,6 +312,7 @@ pub struct LexLinear;
 
 impl LexImplementation for LexNom {
     fn lex(input: &str) -> Result<(Vec<Token>, Vec<&str>)> {
+        measure!("lex");
         if let Some(c) = input.chars().find(|&c| !matches!(c as u32, 10 | 32..=126)) {
             bail!("invalid character {c:?}");
         }
@@ -335,6 +337,7 @@ impl LexImplementation for LexLinear {
     #[allow(clippy::too_many_lines)]
     #[allow(clippy::range_plus_one)]
     fn lex(str_input: &str) -> Result<(Vec<Token>, Vec<&str>)> {
+        measure!("lex");
         let mut acc = vec![];
         let mut input_by_token = vec![];
 
