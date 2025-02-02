@@ -98,24 +98,24 @@ pub fn print_timings() {
                 for (name, elapsed) in children {
                     let printed_name = name.split("->").last().unwrap();
                     let children = get_children(map, level + 1, name);
-                    let printed_name = if printed_name == *name {
+
+                    let time = if children.is_empty() {
+                        dur::Duration::from_nanos(*elapsed).to_string()
+                    } else {
                         format!(
-                            "{} {} {}",
-                            name.blue(),
+                            "{} {}",
                             dur::Duration::from_nanos(
-                                *elapsed - children.iter().map(|(_, e)| *e).sum::<u128>()
+                                *elapsed - children.iter().map(|(_, e)| *e).sum::<u128>(),
                             ),
-                            dur::Duration::from_nanos(*elapsed).to_string().dimmed(),
+                            dur::Duration::from_nanos(*elapsed).to_string().dimmed()
                         )
+                    };
+
+                    let printed_name = if printed_name == *name {
+                        format!("{} {}", name.blue(), time)
                     } else {
                         let printed_name = format!("-> {printed_name}").blue();
-                        let printed_name = format!(
-                            "{printed_name} {} {}",
-                            dur::Duration::from_nanos(
-                                *elapsed - children.iter().map(|(_, e)| *e).sum::<u128>()
-                            ),
-                            dur::Duration::from_nanos(*elapsed).to_string().dimmed(),
-                        );
+                        let printed_name = format!("{printed_name} {time}");
                         let (total_width, _) = col_widths.get(level as usize).unwrap();
                         format!(
                             "{printed_name:>total_width$}",
