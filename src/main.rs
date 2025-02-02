@@ -1,3 +1,5 @@
+#![deny(clippy::pedantic)]
+
 mod lex;
 mod parse;
 
@@ -86,11 +88,12 @@ fn main() {
     };
 
     if !parse {
-        let mut output = String::new();
         use std::fmt::Write;
 
+        let mut output = String::new();
+
         for token in &tokens {
-            writeln!(output, "{}", token).unwrap();
+            writeln!(output, "{token}").unwrap();
         }
         writeln!(output, "Compilation succeeded").unwrap();
 
@@ -115,11 +118,11 @@ fn main() {
     };
 
     if !typecheck {
-        let mut output = String::new();
         use std::fmt::Write;
+        let mut output = String::new();
 
         for parsed in &parsed {
-            writeln!(output, "{}", parsed).unwrap();
+            writeln!(output, "{parsed}").unwrap();
         }
         writeln!(output, "Compilation succeeded").unwrap();
 
@@ -236,9 +239,7 @@ fn undo_slice_by_cuts<'a, const N: usize, const M: usize>(
 fn test_correct(directory: &str, mut tester: impl FnMut(&str, &str)) {
     use std::{fs, path::Path};
     let folder = Path::new(directory);
-    if !folder.exists() {
-        panic!("Could not find {}", folder.display());
-    }
+    assert!(folder.exists(), "Could not find {}", folder.display());
 
     let mut all_test_paths = vec![];
     let mut all_solution_paths = vec![];
@@ -265,7 +266,7 @@ fn test_correct(directory: &str, mut tester: impl FnMut(&str, &str)) {
         let file = fs::read_to_string(test_path).unwrap();
         let solution_file = fs::read_to_string(solution_path).unwrap();
 
-        println!("{}", file);
+        println!("{file}");
 
         tester(&file, &solution_file);
     }
@@ -274,9 +275,7 @@ fn test_correct(directory: &str, mut tester: impl FnMut(&str, &str)) {
 #[cfg(test)]
 fn test_solos(directory: &str, mut tester: impl FnMut(&str, &Path)) {
     let folder = Path::new(directory);
-    if !folder.exists() {
-        panic!("Could not find {}", folder.display());
-    }
+    assert!(folder.exists(), "Could not find {}", folder.display());
 
     let test_paths = fs::read_dir(folder)
         .unwrap()

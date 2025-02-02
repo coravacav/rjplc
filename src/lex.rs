@@ -96,10 +96,10 @@ pub enum Token<'a> {
 impl PartialEq for Token<'_> {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (Token::FLOATVAL(a), Token::FLOATVAL(b)) => a.as_ptr() == b.as_ptr(),
-            (Token::INTVAL(a), Token::INTVAL(b)) => a.as_ptr() == b.as_ptr(),
-            (Token::STRING(a), Token::STRING(b)) => a.as_ptr() == b.as_ptr(),
-            (Token::VARIABLE(a), Token::VARIABLE(b)) => a.as_ptr() == b.as_ptr(),
+            (Token::FLOATVAL(a), Token::FLOATVAL(b))
+            | (Token::INTVAL(a), Token::INTVAL(b))
+            | (Token::STRING(a), Token::STRING(b))
+            | (Token::VARIABLE(a), Token::VARIABLE(b)) => a.as_ptr() == b.as_ptr(),
             _ => std::mem::discriminant(self) == std::mem::discriminant(other),
         }
     }
@@ -332,6 +332,8 @@ impl LexImplementation for LexNom {
 }
 
 impl LexImplementation for LexLinear {
+    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::range_plus_one)]
     fn lex(str_input: &str) -> Result<(Vec<Token>, Vec<&str>)> {
         let mut acc = vec![];
         let mut input_by_token = vec![];
@@ -446,6 +448,7 @@ impl LexImplementation for LexLinear {
                                 Some(b'.') => break,
                                 Some(b'0'..=b'9') => current_index += 1,
                                 // All other legal characters
+                                #[allow(clippy::match_same_arms)]
                                 Some(10 | 32..=126) => break,
                                 Some(c) => bail!("Illegal character {c:?} while parsing a number"),
                                 None => bail!("Unexpected end of file while parsing a number"),
@@ -672,7 +675,7 @@ fn test_lex_correct() {
 
             for token in tokens {
                 use std::fmt::Write;
-                writeln!(output, "{}", token).unwrap();
+                writeln!(output, "{token}").unwrap();
             }
 
             pretty_assertions::assert_eq!(output, solution_file);

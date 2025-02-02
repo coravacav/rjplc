@@ -36,7 +36,15 @@ impl<T: std::fmt::Display + std::fmt::Debug> PrintJoined for [T] {
 }
 
 enum ParseResult<'a, T> {
-    NotParsed(Box<dyn Fn() -> String + 'a>, usize),
+    NotParsedErrorPrinted {
+        error_message: Box<dyn Fn() -> String + 'a>,
+        line: usize,
+        column: usize,
+    },
+    NotParsed {
+        error_message: Box<dyn Fn() -> String + 'a>,
+        position: usize,
+    },
     Parsed(Parser<'a>, T),
 }
 
@@ -49,12 +57,29 @@ macro_rules! miss {
 macro_rules! consume {
     ($parser:ident, $type:ty, $outvar:ident) => {
         let (advanced_parser, $outvar) = match <$type>::consume($parser) {
-            ParseResult::NotParsed(report, position) => {
-                return ParseResult::NotParsed(report, position)
-            }
             ParseResult::Parsed(parser, t) => {
-                debug_assert_ne!($parser, parser);
+                debug_assert_ne!($parser.current_position, parser.current_position);
                 (parser, t)
+            }
+            ParseResult::NotParsed {
+                error_message,
+                position,
+            } => {
+                return ParseResult::NotParsed {
+                    error_message,
+                    position,
+                }
+            }
+            ParseResult::NotParsedErrorPrinted {
+                error_message,
+                line,
+                column,
+            } => {
+                return ParseResult::NotParsedErrorPrinted {
+                    error_message,
+                    line,
+                    column,
+                }
             }
         };
 
@@ -70,7 +95,7 @@ fn consume_list<'a, 'b, T: Consume<'a> + std::fmt::Debug>(
 ) -> ParseResult<'a, Vec<T>> {
     let mut list = vec![];
     loop {
-        if let ParseResult::Parsed(parser, _) = parser.check_skip(end_token) {
+        if let ParseResult::Parsed(parser, ()) = parser.check_skip(end_token) {
             return parser.complete(list);
         }
 
@@ -100,12 +125,29 @@ macro_rules! consume_list {
             Token::$delimeter,
             $delimeter_terminated,
         ) {
-            ParseResult::NotParsed(report, position) => {
-                return ParseResult::NotParsed(report, position)
-            }
             ParseResult::Parsed(parser, t) => {
-                debug_assert_ne!($parser, parser);
+                debug_assert_ne!($parser.current_position, parser.current_position);
                 (parser, t)
+            }
+            ParseResult::NotParsed {
+                error_message,
+                position,
+            } => {
+                return ParseResult::NotParsed {
+                    error_message,
+                    position,
+                }
+            }
+            ParseResult::NotParsedErrorPrinted {
+                error_message,
+                line,
+                column,
+            } => {
+                return ParseResult::NotParsedErrorPrinted {
+                    error_message,
+                    line,
+                    column,
+                }
             }
         };
 
@@ -122,22 +164,63 @@ macro_rules! consume_list {
 macro_rules! check {
     ($parser:ident, $token:tt) => {
         let advanced_parser = match $parser.check_skip(Token::$token) {
-            ParseResult::NotParsed(report, position) => {
-                return ParseResult::NotParsed(report, position)
-            }
             ParseResult::Parsed(parser, _) => (parser),
+            ParseResult::NotParsed {
+                error_message,
+                position,
+            } => {
+                return ParseResult::NotParsed {
+                    error_message,
+                    position,
+                }
+            }
+            ParseResult::NotParsedErrorPrinted {
+                error_message,
+                line,
+                column,
+            } => {
+                return ParseResult::NotParsedErrorPrinted {
+                    error_message,
+                    line,
+                    column,
+                }
+            }
         };
 
         $parser = advanced_parser;
     };
 }
 
-#[derive(Debug, Clone, Copy)]
+macro_rules! localize_error {
+    ($parser:ident, $ty:ty, $function_body:expr) => {{
+        fn inner_func<'a>(mut $parser: Parser<'a>) -> ParseResult<'a, $ty> {
+            $function_body
+        }
+
+        match inner_func($parser) {
+            ParseResult::NotParsed {
+                error_message,
+                position,
+            } if position != $parser.current_position => {
+                let (line, column) = $parser.print_error(position);
+                ParseResult::NotParsedErrorPrinted {
+                    error_message,
+                    line,
+                    column,
+                }
+            }
+            t => t,
+        }
+    }};
+}
+
+#[derive(Clone, Copy)]
 struct Parser<'a> {
     original_tokens: &'a [Token<'a>],
     current_position: usize,
     input_by_token: &'a [&'a str],
     source: &'a str,
+    // error_from: Option<NonZeroUsize>,
 }
 
 impl PartialEq for Parser<'_> {
@@ -152,7 +235,10 @@ impl<'a> Parser<'a> {
     }
 
     fn miss<T>(&self, report: Box<dyn Fn() -> String + 'a>) -> ParseResult<'a, T> {
-        ParseResult::NotParsed(report, self.current_position)
+        ParseResult::NotParsed {
+            error_message: report,
+            position: self.current_position,
+        }
     }
 
     #[must_use]
@@ -166,10 +252,12 @@ impl<'a> Parser<'a> {
         if self.check_one(token) {
             ParseResult::Parsed(self.skip_one(), ())
         } else {
-            ParseResult::NotParsed(
-                Box::new(move || format!("expected {token:?}, found {:?}", self.first())),
-                self.current_position,
-            )
+            ParseResult::NotParsed {
+                error_message: Box::new(move || {
+                    format!("expected {token:?}, found {:?}", self.first())
+                }),
+                position: self.current_position,
+            }
         }
     }
 
@@ -262,7 +350,7 @@ impl<'a> Parser<'a> {
             .map(|line| line.dimmed().to_string())
             .join("\n");
 
-        let output = format!("{}{}{}{}", source_pre, semi_valid, error, source_post);
+        let output = format!("{source_pre}{semi_valid}{error}{source_post}");
         let output = output
             .split('\n')
             .zip(newlines)
@@ -343,11 +431,13 @@ impl std::fmt::Display for Field<'_> {
 }
 
 impl<'a> Consume<'a> for Field<'a> {
-    fn consume(mut parser: Parser<'a>) -> ParseResult<'a, Self> {
-        consume!(parser, Variable, s);
-        check!(parser, COLON);
-        consume!(parser, Type, ty);
-        parser.complete(Self(s, ty))
+    fn consume(parser: Parser<'a>) -> ParseResult<'a, Self> {
+        localize_error!(parser, Field<'a>, {
+            consume!(parser, Variable, s);
+            check!(parser, COLON);
+            consume!(parser, Type, ty);
+            parser.complete(Field(s, ty))
+        })
     }
 }
 
@@ -437,7 +527,7 @@ impl<'a> Consume<'a> for Cmd<'a> {
                 consume_list!(parser, RCURLY, NEWLINE, fields);
                 parser.complete(Self::Struct(v, fields))
             }
-            t => miss!(parser, "expected a command keyword (ASSERT | RETURN | LET | ASSERT | PRINT | SHOW | TIME | FN | TYPE | STRUCT), found {t:?}"),
+            (_, t) => miss!(parser, "expected a command keyword (ASSERT | RETURN | LET | ASSERT | PRINT | SHOW | TIME | FN | TYPE | STRUCT), found {t:?}"),
         }
     }
 }
@@ -493,32 +583,34 @@ impl std::fmt::Display for Statement<'_> {
 }
 
 impl<'a> Consume<'a> for Statement<'a> {
-    fn consume(mut parser: Parser<'a>) -> ParseResult<'a, Self> {
-        match parser.first() {
-            Token::ASSERT => {
-                parser = parser.skip_one();
-                consume!(parser, Expr, expr);
-                check!(parser, COMMA);
-                consume!(parser, LiteralString, msg);
-                parser.complete(Self::Assert(expr, msg))
+    fn consume(parser: Parser<'a>) -> ParseResult<'a, Self> {
+        localize_error!(parser, Statement<'a>, {
+            match parser.first() {
+                Token::ASSERT => {
+                    parser = parser.skip_one();
+                    consume!(parser, Expr, expr);
+                    check!(parser, COMMA);
+                    consume!(parser, LiteralString, msg);
+                    parser.complete(Statement::Assert(expr, msg))
+                }
+                Token::RETURN => {
+                    parser = parser.skip_one();
+                    consume!(parser, Expr, expr);
+                    parser.complete(Statement::Return(expr))
+                }
+                Token::LET => {
+                    parser = parser.skip_one();
+                    consume!(parser, LValue, lvalue);
+                    check!(parser, EQUALS);
+                    consume!(parser, Expr, expr);
+                    parser.complete(Statement::Let(lvalue, expr))
+                }
+                t => miss!(
+                    parser,
+                    "expected a start of statement (ASSERT | RETURN | LET), found {t:?}"
+                ),
             }
-            Token::RETURN => {
-                parser = parser.skip_one();
-                consume!(parser, Expr, expr);
-                parser.complete(Self::Return(expr))
-            }
-            Token::LET => {
-                parser = parser.skip_one();
-                consume!(parser, LValue, lvalue);
-                check!(parser, EQUALS);
-                consume!(parser, Expr, expr);
-                parser.complete(Self::Let(lvalue, expr))
-            }
-            t => miss!(
-                parser,
-                "expected a start of statement (ASSERT | RETURN | LET), found {t:?}"
-            ),
-        }
+        })
     }
 }
 
@@ -556,7 +648,7 @@ impl std::fmt::Display for Expr<'_> {
                 }
             }),
             Expr::Float(fl, s_fl) => s_fl
-                .split_once(".")
+                .split_once('.')
                 .map(|(trunc, _)| {
                     let trunc = trunc.trim_start_matches('0');
                     if trunc.is_empty() {
@@ -564,7 +656,7 @@ impl std::fmt::Display for Expr<'_> {
                     } else if trunc.len() > 15 {
                         write!(f, "(FloatExpr {})", fl.trunc())
                     } else {
-                        write!(f, "(FloatExpr {})", trunc)
+                        write!(f, "(FloatExpr {trunc})")
                     }
                 })
                 .unwrap(),
@@ -673,7 +765,7 @@ impl<'a> Consume<'a> for Expr<'a> {
                 consume_list!(parser, RCURLY, exprs);
                 (parser, Expr::Tuple(exprs))
             }
-            t => miss!(parser,
+            (_, t) => miss!(parser,
                 "expected start of expression (INTVAL | FLOATVAL | TRUE | FALSE | VARIABLE | LSQUARE | LPAREN | LCURLY), found {t:?}"
             ),
         };
@@ -753,7 +845,7 @@ impl<'a> Consume<'a> for LValue<'a> {
                 consume_list!(parser, RCURLY, lvs);
                 (parser, LValue::Tuple(lvs))
             }
-            t => miss!(
+            (_, t) => miss!(
                 parser,
                 "expected start of lvalue (VARIABLE | LCURLY), found {t:?}"
             ),
@@ -787,10 +879,10 @@ impl PartialEq for Type<'_> {
         match (self, other) {
             (Type::Struct(s), Type::Struct(o)) => s.as_ptr() == o.as_ptr(),
             (Type::Array(s, _), Type::Array(o, _)) => std::ptr::eq(&**s, &**o),
-            (Type::Float, Type::Float) => true,
-            (Type::Int, Type::Int) => true,
-            (Type::Bool, Type::Bool) => true,
-            (Type::Void, Type::Void) => true,
+            (Type::Float, Type::Float)
+            | (Type::Int, Type::Int)
+            | (Type::Bool, Type::Bool)
+            | (Type::Void, Type::Void) => true,
             (Type::Tuple(s), Type::Tuple(o)) => s.as_ptr() == o.as_ptr(),
             _ => false,
         }
@@ -827,7 +919,7 @@ impl<'a> Consume<'a> for Type<'a> {
                 consume_list!(parser, RCURLY, tys);
                 (parser, Type::Tuple(tys))
             }
-            t => miss!(
+            (_, t) => miss!(
                 parser,
                 "expected start of type (VARIABLE | FLOAT | LCURLY), found {t:?}"
             ),
@@ -851,11 +943,11 @@ impl<'a> Consume<'a> for Type<'a> {
                                 parser = advanced_parser;
                                 depth += 1;
                             }
-                            t => miss!(parser, "expected RSQUARE or COMMA, found {t:?}"),
+                            (_, t) => miss!(parser, "expected RSQUARE or COMMA, found {t:?}"),
                         }
                     }
 
-                    ty = Self::Array(Box::new(ty), depth)
+                    ty = Self::Array(Box::new(ty), depth);
                 }
                 _ => break,
             };
@@ -879,11 +971,13 @@ impl std::fmt::Display for Binding<'_> {
 }
 
 impl<'a> Consume<'a> for Binding<'a> {
-    fn consume(mut parser: Parser<'a>) -> ParseResult<'a, Self> {
-        consume!(parser, LValue, lv);
-        check!(parser, COLON);
-        consume!(parser, Type, ty);
-        parser.complete(Self::Var(lv, ty))
+    fn consume(parser: Parser<'a>) -> ParseResult<'a, Self> {
+        localize_error!(parser, Binding<'a>, {
+            consume!(parser, LValue, lv);
+            check!(parser, COLON);
+            consume!(parser, Type, ty);
+            parser.complete(Binding::Var(lv, ty))
+        })
     }
 }
 
@@ -912,7 +1006,10 @@ pub fn parse<'a>(
                 // parser.successfully_parsed.set(0);
                 cmds.push(cmd);
             }
-            ParseResult::NotParsed(e, err_position) => {
+            ParseResult::NotParsed {
+                error_message: e,
+                position: err_position,
+            } => {
                 if let Token::NEWLINE = parser.first() {
                     parser = parser.skip_one();
                     continue;
@@ -928,6 +1025,25 @@ pub fn parse<'a>(
                     "{}",
                     format!("{} at {}:{}:{}", e(), path.display(), line, column)
                 );
+            }
+            ParseResult::NotParsedErrorPrinted {
+                error_message: e,
+                line,
+                column,
+            } => {
+                if let Token::NEWLINE = parser.first() {
+                    parser = parser.skip_one();
+                    continue;
+                }
+
+                if let Token::END_OF_FILE = parser.first() {
+                    break;
+                }
+
+                bail!(
+                    "{}",
+                    format!("{} at {}:{}:{}", e(), path.display(), line, column)
+                )
             }
         }
     }
@@ -954,14 +1070,14 @@ fn test_parse_correct() {
 
         for parsed in parsed {
             use std::fmt::Write;
-            writeln!(output, "{}", parsed).unwrap();
+            writeln!(output, "{parsed}").unwrap();
         }
 
-        if output != solution_file {
-            let output = regex.replace_all(&output, " ");
-            let solution_file = regex.replace_all(solution_file, " ");
+        if output == solution_file {
             pretty_assertions::assert_eq!(output, solution_file);
         } else {
+            let output = regex.replace_all(&output, " ");
+            let solution_file = regex.replace_all(solution_file, " ");
             pretty_assertions::assert_eq!(output, solution_file);
         }
     };
@@ -982,7 +1098,7 @@ fn test_parse_fails() {
 
         match parse(&tokens, &input_by_tokens, file, file_path) {
             Ok(parsed) => {
-                println!("{:?}", parsed);
+                println!("{parsed:?}");
                 panic!("expected parse to fail");
             }
             Err(e) => {
