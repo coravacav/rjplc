@@ -297,11 +297,14 @@ fn test_correct(directory: &str, mut tester: impl FnMut(&str, &str)) {
     }
 
     for (test_path, solution_path) in all_test_paths.iter().zip(all_solution_paths.iter()) {
+        #[cfg(not(feature = "measure"))]
         println!("{}", test_path.display());
+        #[cfg(not(feature = "measure"))]
         println!("{}", solution_path.display());
         let file = fs::read_to_string(test_path).unwrap();
         let solution_file = fs::read_to_string(solution_path).unwrap();
 
+        #[cfg(not(feature = "measure"))]
         println!("{file}");
 
         tester(&file, &solution_file);
@@ -321,6 +324,7 @@ fn test_solos(directory: &str, mut tester: impl FnMut(&str, &Path)) {
 
     for test_path in test_paths {
         let test_path = test_path.path();
+        #[cfg(not(feature = "measure"))]
         println!("{}", test_path.display());
         if let Ok(file) = fs::read_to_string(&test_path) {
             tester(&file, &test_path);

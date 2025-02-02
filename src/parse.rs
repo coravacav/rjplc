@@ -12,6 +12,8 @@ use crate::{
 #[cfg(test)]
 use crate::lex::LexImplementation;
 #[cfg(test)]
+use crate::measure::print_timings;
+#[cfg(test)]
 use crate::{test_correct, test_solos};
 
 trait Consume<'a>: Sized {
@@ -362,6 +364,10 @@ impl<'a> Parser<'a> {
             .map(|(line_number, _)| line_number.to_string().len())
             .max()
             .unwrap();
+
+        #[cfg(feature = "measure")]
+        #[cfg(test)]
+        return (line, column);
 
         for (line_number, line) in output {
             println!(
@@ -1097,6 +1103,7 @@ fn test_parse_correct() {
     test_correct("grader/hw4/ok", tester);
     test_correct("grader/hw4/ok-fuzzer", tester);
     // test_correct("grader/hw5/ok", tester);
+    print_timings();
 }
 
 #[test]
@@ -1112,6 +1119,7 @@ fn test_parse_fails() {
                 panic!("expected parse to fail");
             }
             Err(e) => {
+                #[cfg(not(feature = "measure"))]
                 println!("Compilation failed {e:?}");
             }
         }
@@ -1123,4 +1131,5 @@ fn test_parse_fails() {
     test_solos("grader/hw4/fail-fuzzer1", tester);
     test_solos("grader/hw4/fail-fuzzer2", tester);
     test_solos("grader/hw4/fail-fuzzer3", tester);
+    print_timings();
 }
