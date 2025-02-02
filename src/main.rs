@@ -102,7 +102,7 @@ fn main() {
 
     if !parse {
         let output = {
-            measure!("make output");
+            measure!("out");
             use std::fmt::Write;
             let mut output = String::new();
 
@@ -142,7 +142,7 @@ fn main() {
 
     if !typecheck {
         let output = {
-            measure!("make output");
+            measure!("out");
             use std::fmt::Write;
             let mut output = String::new();
 

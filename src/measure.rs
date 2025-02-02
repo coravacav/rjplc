@@ -1,21 +1,48 @@
-use std::{cell::RefCell, collections::HashMap, time::Instant};
+use std::{cell::RefCell, collections::HashMap, str::FromStr, time::Instant};
 
 thread_local! {
-    static TIMINGS_MAP: RefCell<HashMap<&'static str, u128>> = RefCell::new(HashMap::new());
+    // pub(crate) static SUM_TIMINGS_MAP: RefCell<HashMap<&'static str, u128>> = RefCell::new(HashMap::new());
+    pub(crate) static CURRENT_TIMINGS_STACK: RefCell<Vec<&'static str>> = const { RefCell::new(vec![]) };
+    pub(crate) static TREE_TIMINGS: RefCell<HashMap<u8, HashMap<String, u128>>> = RefCell::new(HashMap::new());
 }
 
 pub struct MeasureHandle {
-    pub name: &'static str,
+    // pub name: &'static str,
     pub start: Instant,
 }
 
 impl Drop for MeasureHandle {
     fn drop(&mut self) {
         let elapsed = self.start.elapsed().as_nanos();
-        // println!("{} {}", self.name, elapsed);
 
-        TIMINGS_MAP.with(|timings_map| {
-            *timings_map.borrow_mut().entry(self.name).or_insert(0) += elapsed;
+        // SUM_TIMINGS_MAP.with(|timings_map| {
+        //     *timings_map.borrow_mut().entry(self.name).or_insert(0) += elapsed;
+        // });
+
+        CURRENT_TIMINGS_STACK.with(|stack| {
+            TREE_TIMINGS.with(|timings_map| {
+                let mut stack_str = String::from_str(stack.borrow().first().unwrap()).unwrap();
+                let mut previous_layer = "";
+                let mut level = 1;
+                for layer in stack.borrow().iter().skip(1) {
+                    if *layer == previous_layer {
+                        continue;
+                    }
+                    previous_layer = layer;
+                    stack_str.push_str("->");
+                    stack_str.push_str(layer);
+                    level += 1;
+                }
+
+                *timings_map
+                    .borrow_mut()
+                    .entry(level)
+                    .or_default()
+                    .entry(stack_str)
+                    .or_insert(0) += elapsed;
+            });
+
+            stack.borrow_mut().pop();
         });
     }
 }
@@ -25,20 +52,119 @@ macro_rules! measure {
     ($name:expr) => {
         #[cfg(feature = "measure")]
         let _measure = $crate::measure::MeasureHandle {
-            name: $name,
+            // name: $name,
             start: std::time::Instant::now(),
         };
+        #[cfg(feature = "measure")]
+        $crate::measure::CURRENT_TIMINGS_STACK.with(|stack| {
+            stack.borrow_mut().push($name);
+        });
     };
 }
 
 pub fn print_timings() {
-    #[cfg(feature = "measure")]
-    TIMINGS_MAP.with(|timings_map| {
+    // #[cfg(feature = "measure")]
+    {
+        use colored::Colorize;
         use itertools::Itertools;
 
-        for (name, elapsed) in timings_map.borrow().iter().sorted_by(|a, b| a.1.cmp(b.1)) {
-            use colored::Colorize;
-            println!("{}: {}", name.blue(), dur::Duration::from_nanos(*elapsed));
-        }
-    });
+        TREE_TIMINGS.with(|timings_map| {
+            fn get_children(
+                map: &HashMap<u8, HashMap<String, u128>>,
+                level: u8,
+                name: &str,
+            ) -> Vec<(String, u128)> {
+                let Some(pos) = map.get(&(level + 1)) else {
+                    return vec![];
+                };
+
+                let mut children = pos
+                    .iter()
+                    .filter(|(n, _)| n.starts_with(name))
+                    .map(|(n, e)| (n.to_string(), *e))
+                    .collect_vec();
+
+                children.sort_by(|a, b| b.1.cmp(&a.1));
+
+                children
+            }
+
+            fn recur_write_tree(
+                map: &HashMap<u8, HashMap<String, u128>>,
+                children: &[(String, u128)],
+                col_widths: &[(usize, usize)],
+                level: u8,
+            ) {
+                for (name, elapsed) in children {
+                    let printed_name = name.split("->").last().unwrap();
+                    let children = get_children(map, level + 1, name);
+                    let printed_name = if printed_name == *name {
+                        format!(
+                            "{} {} {}",
+                            name.blue(),
+                            dur::Duration::from_nanos(
+                                *elapsed - children.iter().map(|(_, e)| *e).sum::<u128>()
+                            ),
+                            dur::Duration::from_nanos(*elapsed).to_string().dimmed(),
+                        )
+                    } else {
+                        let printed_name = format!("-> {printed_name}").blue();
+                        let printed_name = format!(
+                            "{printed_name} {} {}",
+                            dur::Duration::from_nanos(
+                                *elapsed - children.iter().map(|(_, e)| *e).sum::<u128>()
+                            ),
+                            dur::Duration::from_nanos(*elapsed).to_string().dimmed(),
+                        );
+                        let (total_width, _) = col_widths.get(level as usize).unwrap();
+                        format!(
+                            "{printed_name:>total_width$}",
+                            total_width = total_width + printed_name.len(),
+                        )
+                    };
+
+                    println!("{printed_name}");
+                    recur_write_tree(map, &children, col_widths, level + 1);
+                }
+            }
+
+            let timings_map = timings_map.borrow();
+
+            let widths = timings_map
+                .values()
+                .flat_map(|v| v.keys())
+                .map(|s| s.split("->").map(str::len).collect_vec())
+                .collect_vec();
+
+            let mut max_col_widths: Vec<usize> = vec![];
+
+            for pieces in widths {
+                if pieces.len() > max_col_widths.len() {
+                    max_col_widths.resize(pieces.len(), 0);
+                }
+
+                for (i, &w) in pieces.iter().enumerate() {
+                    max_col_widths[i] = max_col_widths[i].max(w);
+                }
+            }
+
+            let mut col_widths = vec![];
+            for (i, w) in max_col_widths.into_iter().enumerate() {
+                col_widths.push((
+                    col_widths
+                        .get(i.saturating_sub(1))
+                        .copied()
+                        .map_or(0, |(t, ow)| t + ow),
+                    if i > 0 { w + 3 } else { w },
+                ));
+            }
+
+            recur_write_tree(
+                &timings_map,
+                &get_children(&timings_map, 0, ""),
+                &col_widths,
+                1,
+            );
+        });
+    }
 }

@@ -419,7 +419,7 @@ impl std::fmt::Display for LiteralString<'_> {
 
 impl<'a, 'b> Consume<'a, 'b> for LiteralString<'a> {
     fn consume(parser: Parser, data: &'b StaticParserData<'a>) -> ParseResult<'a, Self> {
-        measure!("literal_string");
+        measure!("string_lit");
         let s = match parser.first(data) {
             Token::STRING(s) => s,
             t => miss!(parser, "expected string, found {t:?}"),
