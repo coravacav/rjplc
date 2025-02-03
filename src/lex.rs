@@ -21,6 +21,7 @@ pub enum Op {
     Div,
     Mod,
     Not,
+    Neq,
     Eq,
     Greater,
     Less,
@@ -40,6 +41,7 @@ impl std::fmt::Display for Op {
             Op::Mod => write!(f, "%"),
             Op::Not => write!(f, "!"),
             Op::Eq => write!(f, "=="),
+            Op::Neq => write!(f, "!="),
             Op::Greater => write!(f, ">"),
             Op::Less => write!(f, "<"),
             Op::And => write!(f, "&&"),
@@ -233,6 +235,7 @@ impl LexNom {
             Some("&&") => return Ok((&input[2..], Token::OP(Op::And))),
             Some("||") => return Ok((&input[2..], Token::OP(Op::Or))),
             Some("==") => return Ok((&input[2..], Token::OP(Op::Eq))),
+            Some("!=") => return Ok((&input[2..], Token::OP(Op::Neq))),
             Some(">=") => return Ok((&input[2..], Token::OP(Op::GreaterEq))),
             Some("<=") => return Ok((&input[2..], Token::OP(Op::LessEq))),
             _ => {}
@@ -623,9 +626,15 @@ impl LexImplementation for LexLinear {
                     index += 1;
                 }
                 Some(b'!') => {
-                    acc.push(Token::OP(Op::Not));
-                    input_by_token.push(&str_input[index..index + 1]);
-                    index += 1;
+                    if let Some(b'=') = input.get(index + 1) {
+                        acc.push(Token::OP(Op::Neq));
+                        input_by_token.push(&str_input[index..index + 2]);
+                        index += 2;
+                    } else {
+                        acc.push(Token::OP(Op::Not));
+                        input_by_token.push(&str_input[index..index + 1]);
+                        index += 1;
+                    }
                 }
                 Some(b'{') => {
                     acc.push(Token::LCURLY);

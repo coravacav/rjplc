@@ -155,11 +155,6 @@ fn main() {
 
         print_timings();
 
-        println!(
-            "Compilation took {}",
-            dur::Duration::from_std(now.elapsed())
-        );
-
         exit(0);
     }
 

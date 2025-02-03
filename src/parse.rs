@@ -436,6 +436,27 @@ impl<'a, 'b> Consume<'a, 'b> for LiteralString<'a> {
 }
 
 #[derive(Debug, Clone)]
+pub struct LoopField<'a>(Variable<'a>, Expr<'a>);
+
+impl std::fmt::Display for LoopField<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} {}", self.0, self.1)
+    }
+}
+
+impl<'a, 'b> Consume<'a, 'b> for LoopField<'a> {
+    fn consume(parser: Parser, data: &'b StaticParserData<'a>) -> ParseResult<'a, Self> {
+        measure!("arraySumField");
+        localize_error!(parser, data, LoopField<'a>, {
+            consume!(parser, data, Variable, s);
+            check!(parser, data, COLON);
+            consume!(parser, data, Expr, expr);
+            parser.complete(LoopField(s, expr))
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct Field<'a>(Variable<'a>, Type<'a>);
 
 impl std::fmt::Display for Field<'_> {
@@ -475,72 +496,72 @@ impl<'a, 'b> Consume<'a, 'b> for Cmd<'a> {
         measure!("cmd");
         match parser.next(data) {
             (mut parser, Token::READ) => {
-                check!(parser, data,IMAGE);
-                consume!(parser, data,LiteralString, s);
-                check!(parser, data,TO);
-                consume!(parser, data,LValue, lvalue);
-                check!(parser, data,NEWLINE);
+                check!(parser, data, IMAGE);
+                consume!(parser, data, LiteralString, s);
+                check!(parser, data, TO);
+                consume!(parser, data, LValue, lvalue);
+                check!(parser, data, NEWLINE);
                 parser.complete(Self::Read(s, lvalue))
             }
             (mut parser, Token::TIME) => {
-                consume!(parser, data,Cmd, cmd);
+                consume!(parser, data, Cmd, cmd);
                 parser.complete(Self::Time(Box::new(cmd)))
             }
             (mut parser, Token::LET) => {
-                consume!(parser, data,LValue, lvalue);
-                check!(parser, data,EQUALS);
-                consume!(parser, data,Expr, expr);
-                check!(parser, data,NEWLINE);
+                consume!(parser, data, LValue, lvalue);
+                check!(parser, data, EQUALS);
+                consume!(parser, data, Expr, expr);
+                check!(parser, data, NEWLINE);
                 parser.complete(Self::Let(lvalue, expr))
             }
             (mut parser, Token::ASSERT) => {
-                consume!(parser, data,Expr, expr);
-                check!(parser, data,COMMA);
-                consume!(parser, data,LiteralString, s);
-                check!(parser, data,NEWLINE);
+                consume!(parser, data, Expr, expr);
+                check!(parser, data, COMMA);
+                consume!(parser, data, LiteralString, s);
+                check!(parser, data, NEWLINE);
                 parser.complete(Self::Assert(expr, s))
             }
             (mut parser, Token::SHOW) => {
-                consume!(parser, data,Expr, expr);
-                check!(parser, data,NEWLINE);
+                consume!(parser, data, Expr, expr);
+                check!(parser, data, NEWLINE);
                 parser.complete(Self::Show(expr))
             }
             (mut parser, Token::WRITE) => {
-                check!(parser, data,IMAGE);
-                consume!(parser, data,Expr, expr);
-                check!(parser, data,TO);
-                consume!(parser, data,LiteralString, s);
-                check!(parser, data,NEWLINE);
+                check!(parser, data, IMAGE);
+                consume!(parser, data, Expr, expr);
+                check!(parser, data, TO);
+                consume!(parser, data, LiteralString, s);
+                check!(parser, data, NEWLINE);
                 parser.complete(Self::Write(expr, s))
             }
             (mut parser, Token::PRINT) => {
-                consume!(parser, data,LiteralString, s);
-                check!(parser, data,NEWLINE);
+                consume!(parser, data, LiteralString, s);
+                check!(parser, data, NEWLINE);
                 parser.complete(Self::Print(s))
             }
             (mut parser, Token::FN) => {
-                consume!(parser, data,Variable, v);
-                check!(parser, data,LPAREN);
-                consume_list!(parser, data,RPAREN, bindings);
-                check!(parser, data,COLON);
-                consume!(parser, data,Type, ty);
-                check!(parser, data,LCURLY);
-                check!(parser, data,NEWLINE);
-                consume_list!(parser, data,RCURLY, NEWLINE, true, statements);
+                consume!(parser, data, Variable, v);
+                check!(parser, data, LPAREN);
+                consume_list!(parser, data, RPAREN, bindings);
+                check!(parser, data, COLON);
+                consume!(parser, data, Type, ty);
+                check!(parser, data, LCURLY);
+                check!(parser, data, NEWLINE);
+                consume_list!(parser, data, RCURLY, NEWLINE, true, statements);
                 parser.complete(Self::Fn(v, bindings, ty, statements))
             }
             (mut parser, Token::TYPE) => {
-                consume!(parser, data,Variable, v);
-                check!(parser, data,EQUALS);
-                consume!(parser, data,Type, ty);
-                check!(parser, data,NEWLINE);
+                consume!(parser, data, Variable, v);
+                check!(parser, data, EQUALS);
+                consume!(parser, data, Type, ty);
+                check!(parser, data, NEWLINE);
                 parser.complete(Self::Type(v, ty))
             }
             (mut parser, Token::STRUCT) => {
-                consume!(parser, data,Variable, v);
-                check!(parser, data,LCURLY);
-                check!(parser, data,NEWLINE);
-                consume_list!(parser, data,RCURLY, NEWLINE, fields);
+                consume!(parser, data, Variable, v);
+                check!(parser, data, LCURLY);
+                check!(parser, data, NEWLINE);
+                consume_list!(parser, data, RCURLY, NEWLINE, fields);
                 parser.complete(Self::Struct(v, fields))
             }
             (_, t) => miss!(parser, "expected a command keyword (ASSERT | RETURN | LET | ASSERT | PRINT | SHOW | TIME | FN | TYPE | STRUCT), found {t:?}"),
@@ -641,19 +662,47 @@ pub enum Expr<'a> {
     False,
     Void,
     Variable(&'a str),
-    Array(Vec<Expr<'a>>),
-    Tuple(Vec<Expr<'a>>),
+    ArrayLiteral(Vec<Expr<'a>>),
+    TupleLiteral(Vec<Expr<'a>>),
+    Paren(Box<Expr<'a>>),
     ArrayIndex(Box<Expr<'a>>, Vec<Expr<'a>>),
-    #[allow(dead_code)]
     Binop(Box<Expr<'a>>, Op, Box<Expr<'a>>),
     Call(Variable<'a>, Vec<Expr<'a>>),
     TupleIndex(Box<Expr<'a>>, Vec<Expr<'a>>),
     StructLiteral(Variable<'a>, Vec<Expr<'a>>),
     Dot(Box<Expr<'a>>, Variable<'a>),
     Unop(Op, Box<Expr<'a>>),
+    If(Box<Expr<'a>>, Box<Expr<'a>>, Box<Expr<'a>>),
+    ArrayLoop(Vec<LoopField<'a>>, Box<Expr<'a>>),
+    SumLoop(Vec<LoopField<'a>>, Box<Expr<'a>>),
+}
+
+const fn op_precedence(op: Op) -> u8 {
+    match op {
+        Op::Add | Op::Sub => 4,
+        Op::Mul | Op::Div | Op::Mod => 5,
+        Op::Less | Op::Greater | Op::LessEq | Op::GreaterEq | Op::Eq | Op::Neq => 3,
+        Op::And | Op::Or => 2,
+        Op::Not => u8::MAX,
+    }
+}
+
+impl Expr<'_> {
+    const UNOP_PRECEDENCE: u8 = 6;
+
+    const fn precedence(&self) -> u8 {
+        match self {
+            Expr::TupleIndex(_, _) | Expr::ArrayIndex(_, _) => 7,
+            Expr::Unop(_, _) => Self::UNOP_PRECEDENCE,
+            Expr::Binop(_, op, _) => op_precedence(*op),
+            Expr::If(_, _, _) | Expr::ArrayLoop(_, _) | Expr::SumLoop(_, _) => 1,
+            _ => u8::MAX,
+        }
+    }
 }
 
 impl std::fmt::Display for Expr<'_> {
+    #[allow(clippy::too_many_lines)]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Expr::Int(_, i) => write!(f, "(IntExpr {})", {
@@ -681,7 +730,8 @@ impl std::fmt::Display for Expr<'_> {
             Expr::False => write!(f, "(FalseExpr)"),
             Expr::Void => write!(f, "(VoidExpr)"),
             Expr::Variable(s) => write!(f, "(VarExpr {s})"),
-            Expr::Array(exprs) => {
+            Expr::Paren(expr) => write!(f, "{expr}"),
+            Expr::ArrayLiteral(exprs) => {
                 if exprs.is_empty() {
                     write!(f, "(ArrayLiteralExpr)")
                 } else {
@@ -690,7 +740,7 @@ impl std::fmt::Display for Expr<'_> {
                     write!(f, ")")
                 }
             }
-            Expr::Tuple(exprs) => {
+            Expr::TupleLiteral(exprs) => {
                 write!(f, "(TupleLiteralExpr ")?;
                 exprs.print_joined(f, " ")?;
                 write!(f, ")")
@@ -736,17 +786,60 @@ impl std::fmt::Display for Expr<'_> {
             Expr::Unop(op, expr) => {
                 write!(f, "(UnopExpr {op} {expr})")
             }
+            Expr::If(expr, expr2, expr3) => {
+                write!(f, "(IfExpr {expr} {expr2} {expr3})")
+            }
+            Expr::ArrayLoop(fields, expr) => {
+                if fields.is_empty() {
+                    write!(f, "(ArrayLoopExpr {expr})")
+                } else {
+                    write!(f, "(ArrayLoopExpr ")?;
+                    fields.print_joined(f, " ")?;
+                    write!(f, " {expr})")
+                }
+            }
+            Expr::SumLoop(fields, expr) => {
+                if fields.is_empty() {
+                    write!(f, "(SumLoopExpr {expr})")
+                } else {
+                    write!(f, "(SumLoopExpr ")?;
+                    fields.print_joined(f, " ")?;
+                    write!(f, " {expr})")
+                }
+            }
         }
     }
 }
 
 impl<'a, 'b> Consume<'a, 'b> for Expr<'a> {
+    #[allow(clippy::too_many_lines)]
     fn consume(parser: Parser, data: &'b StaticParserData<'a>) -> ParseResult<'a, Self> {
         measure!("expr");
         let (mut parser, mut expr) = match parser.next(data) {
             (mut parser, Token::OP(op @ (Op::Not | Op::Sub))) => {
-                consume!(parser, data,Expr, expr);
-                (parser, Expr::Unop(op, Box::new(expr)))
+                fn rearrange_according_to_precedence(
+                    op: Op,
+                    right_expr: Expr<'_>,
+                ) -> Expr<'_> {
+                    if Expr::UNOP_PRECEDENCE < right_expr.precedence() {
+                        Expr::Unop(op, Box::new(right_expr))
+                    } else {
+                        match right_expr {
+                            Expr::Binop(right_expr_left, c2, right_expr_right) => Expr::Binop(
+                                Box::new(rearrange_according_to_precedence(
+                                    op,
+                                    *right_expr_left,
+                                )),
+                                c2,
+                                right_expr_right,
+                            ),
+                            expr => Expr::Unop(op, Box::new(expr)),
+                        }
+                    }
+                }
+
+                consume!(parser, data, Expr, expr);
+                (parser, rearrange_according_to_precedence(op, expr))
             }
             (parser, Token::INTVAL(s)) => {
                 if let Ok(i) = s.parse::<i64>() {
@@ -771,17 +864,37 @@ impl<'a, 'b> Consume<'a, 'b> for Expr<'a> {
             (parser, Token::FALSE) => (parser, Expr::False),
             (parser, Token::VARIABLE(s)) => (parser, Expr::Variable(s)),
             (mut parser, Token::LSQUARE) => {
-                consume_list!(parser, data,RSQUARE, exprs);
-                (parser, Expr::Array(exprs))
+                consume_list!(parser, data, RSQUARE, exprs);
+                (parser, Expr::ArrayLiteral(exprs))
             }
             (mut parser, Token::LPAREN) => {
-                consume!(parser, data,Expr, expr);
-                check!(parser, data,RPAREN);
-                (parser, expr)
+                consume!(parser, data, Expr, expr);
+                check!(parser, data, RPAREN);
+                (parser, Expr::Paren(Box::new(expr)))
             }
             (mut parser, Token::LCURLY) => {
-                consume_list!(parser, data,RCURLY, exprs);
-                (parser, Expr::Tuple(exprs))
+                consume_list!(parser, data, RCURLY, exprs);
+                (parser, Expr::TupleLiteral(exprs))
+            }
+            (mut parser, Token::IF) => {
+                consume!(parser, data, Expr, expr);
+                check!(parser, data, THEN);
+                consume!(parser, data, Expr, expr2);
+                check!(parser, data, ELSE);
+                consume!(parser, data, Expr, expr3);
+                (parser, Expr::If(Box::new(expr), Box::new(expr2), Box::new(expr3)))
+            }
+            (mut parser, Token::ARRAY) => {
+                check!(parser, data, LSQUARE);
+                consume_list!(parser, data, RSQUARE, fields);
+                consume!(parser, data, Expr, expr);
+                (parser, Expr::ArrayLoop(fields, Box::new(expr)))
+            }
+            (mut parser, Token::SUM) => {
+                check!(parser, data, LSQUARE);
+                consume_list!(parser, data, RSQUARE, fields);
+                consume!(parser, data, Expr, expr);
+                (parser, Expr::SumLoop(fields, Box::new(expr)))
             }
             (_, t) => miss!(parser,
                 "expected start of expression (INTVAL | FLOATVAL | TRUE | FALSE | VARIABLE | LSQUARE | LPAREN | LCURLY), found {t:?}"
@@ -810,21 +923,38 @@ impl<'a, 'b> Consume<'a, 'b> for Expr<'a> {
                     consume!(parser, data, Variable, var);
                     (parser, Expr::Dot(Box::new(expr), var))
                 }
+                ((mut parser, Token::OP(op)), _) => {
+                    fn rearrange_according_to_precedence<'a>(
+                        new_expr: Expr<'a>,
+                        op: Op,
+                        right_expr: Expr<'a>,
+                    ) -> Expr<'a> {
+                        if op_precedence(op) < right_expr.precedence() {
+                            Expr::Binop(Box::new(new_expr), op, Box::new(right_expr))
+                        } else {
+                            match right_expr {
+                                Expr::Binop(right_expr_left, c2, right_expr_right) => Expr::Binop(
+                                    Box::new(rearrange_according_to_precedence(
+                                        new_expr,
+                                        op,
+                                        *right_expr_left,
+                                    )),
+                                    c2,
+                                    right_expr_right,
+                                ),
+                                _ => Expr::Binop(Box::new(new_expr), op, Box::new(right_expr)),
+                            }
+                        }
+                    }
+
+                    consume!(parser, data, Expr, expr2);
+                    (parser, rearrange_according_to_precedence(expr, op, expr2))
+                }
                 _ => break (parser, expr),
             };
             parser = rem_parser;
             expr = new_expr;
         };
-
-        // let (parser, expr) = match parser.first() {
-        //     // // ? Only Eq right now to pass that bad test
-        //     // Some(Token::OP(c @ Op::Eq)) => {
-        //     //     parser.skip_one();
-        //     //     let (parser, expr2) = Expr::consume(parser).wrap_err("parsing binary op expr")?;
-        //     //     (parser, Expr::Binop(Box::new(expr), c, Box::new(expr2)))
-        //     // }
-        //     _ => (parser, expr),
-        // };
 
         parser.complete(expr)
     }
@@ -1112,7 +1242,8 @@ fn test_parse_correct() {
     test_correct("grader/hw3/ok-fuzzer", tester);
     test_correct("grader/hw4/ok", tester);
     test_correct("grader/hw4/ok-fuzzer", tester);
-    // test_correct("grader/hw5/ok", tester);
+    test_correct("grader/hw5/ok", tester);
+    test_correct("grader/hw5/ok-fuzzer", tester);
     print_timings();
 }
 
@@ -1141,5 +1272,8 @@ fn test_parse_fails() {
     test_solos("grader/hw4/fail-fuzzer1", tester);
     test_solos("grader/hw4/fail-fuzzer2", tester);
     test_solos("grader/hw4/fail-fuzzer3", tester);
+    test_solos("grader/hw5/fail-fuzzer1", tester);
+    test_solos("grader/hw5/fail-fuzzer2", tester);
+    test_solos("grader/hw5/fail-fuzzer3", tester);
     print_timings();
 }
