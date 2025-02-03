@@ -2,6 +2,7 @@
 name = "rjplc"
 version = "0.1.0"
 edition = "2021"
+private = true
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
@@ -19,3 +20,6 @@ pretty_assertions = "1.4.1"
 homework = []
 measure = []
 default = []
+
+[workspace]
+members = [".", "rjplc-wasm"]

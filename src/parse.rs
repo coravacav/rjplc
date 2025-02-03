@@ -996,6 +996,10 @@ impl<'a, 'b> Consume<'a, 'b> for Binding<'a> {
     }
 }
 
+/// Parse the input string
+///
+/// # Errors
+/// Something
 pub fn parse<'a>(
     tokens: &'a [Token<'a>],
     input_by_token: &'a [&'a str],

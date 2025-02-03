@@ -155,6 +155,10 @@ impl std::fmt::Display for Token<'_> {
 }
 
 pub trait LexImplementation {
+    /// Lex the input string
+    ///
+    /// # Errors
+    /// Something
     fn lex(input: &str) -> Result<(Vec<Token>, Vec<&str>)>;
 }
 
@@ -254,6 +258,10 @@ impl LexNom {
         }
     }
 
+    /// Lex the input string
+    ///
+    /// # Errors
+    /// Something
     pub fn nom_lex(input: &str) -> nom::IResult<&str, (Vec<Token>, Vec<&str>)> {
         let mut acc = vec![];
         let mut input_by_token = vec![];
