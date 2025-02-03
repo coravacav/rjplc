@@ -286,6 +286,12 @@ impl<'a, 'b> Parser {
     fn print_error(&self, data: &'b StaticParserData<'a>, error_position: usize) -> (usize, usize) {
         let current_position = self.current_position;
 
+        let error_position = if error_position == data.input_by_token.len() {
+            data.input_by_token.len() - 1
+        } else {
+            error_position
+        };
+
         let [source_pre, semi_valid, error, source_post] = undo_slice_by_cuts(
             data.source,
             [

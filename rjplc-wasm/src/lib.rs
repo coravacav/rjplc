@@ -33,6 +33,8 @@ impl Output {
 
 #[wasm_bindgen]
 pub fn perform_steps(contents: &str) -> Output {
+    console_error_panic_hook::set_once();
+
     let mut successful_steps = Output {
         lex_output: None,
         parse_output: None,
@@ -52,7 +54,7 @@ pub fn perform_steps(contents: &str) -> Output {
     let mut output = String::new();
 
     for token in &tokens {
-        writeln!(output, "{token}").unwrap();
+        writeln!(output, "{token}").expect("writing should always work");
     }
 
     successful_steps.lex_output = Some(output);
@@ -68,7 +70,7 @@ pub fn perform_steps(contents: &str) -> Output {
     let mut output = String::new();
 
     for parsed in parsed {
-        writeln!(output, "{parsed}").unwrap();
+        writeln!(output, "{parsed}").expect("writing should always work");
     }
 
     successful_steps.parse_output = Some(output);

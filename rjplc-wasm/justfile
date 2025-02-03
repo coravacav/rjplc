@@ -3,8 +3,7 @@ default: build
 build: 
 	wasm-pack build --target web
 
-pkg: build
-	wasm-pack pack
-
-portfolio: pkg
-	cp pkg/rjplc-wasm-0.1.0.tgz ../../portfolio/
+portfolio: build
+	rm -rf ../../portfolio/rjplc-wasm
+	cp -r pkg ../../portfolio/rjplc-wasm
+	rm ../../portfolio/rjplc-wasm/.gitignore

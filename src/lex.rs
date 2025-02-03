@@ -25,6 +25,7 @@ pub enum Op {
     Greater,
     Less,
     And,
+    Or,
     GreaterEq,
     LessEq,
 }
@@ -42,6 +43,7 @@ impl std::fmt::Display for Op {
             Op::Greater => write!(f, ">"),
             Op::Less => write!(f, "<"),
             Op::And => write!(f, "&&"),
+            Op::Or => write!(f, "||"),
             Op::GreaterEq => write!(f, ">="),
             Op::LessEq => write!(f, "<="),
         }
@@ -229,6 +231,7 @@ impl LexNom {
     fn op_and_symbol(input: &str) -> nom::IResult<&str, Token> {
         match input.get(0..2) {
             Some("&&") => return Ok((&input[2..], Token::OP(Op::And))),
+            Some("||") => return Ok((&input[2..], Token::OP(Op::Or))),
             Some("==") => return Ok((&input[2..], Token::OP(Op::Eq))),
             Some(">=") => return Ok((&input[2..], Token::OP(Op::GreaterEq))),
             Some("<=") => return Ok((&input[2..], Token::OP(Op::LessEq))),
@@ -384,7 +387,7 @@ impl LexImplementation for LexLinear {
                                 }
                                 Some(10 | 32..=126) => current_index += 1,
                                 Some(c) => {
-                                    bail!("Illegal character {c:?} while parsing a block comment")
+                                    bail!("illegal character {c:?} while lexing a block comment")
                                 }
                                 None => bail!("unterminated block comment"),
                             }
@@ -398,7 +401,7 @@ impl LexImplementation for LexLinear {
                                 Some(b'\n') => break,
                                 Some(32..=126) => current_index += 1,
                                 Some(c) => {
-                                    bail!("Illegal character {c:?} while parsing a line comment")
+                                    bail!("illegal character {c:?} while lexing a line comment")
                                 }
                                 None => bail!("unterminated line comment"),
                             }
@@ -434,8 +437,8 @@ impl LexImplementation for LexLinear {
                             Some(b'0'..=b'9') => current_index += 1,
                             // All other legal characters
                             Some(10 | 32..=126) => break,
-                            Some(c) => bail!("Illegal character {c:?} while parsing a number"),
-                            None => bail!("Unexpected end of file while parsing a number"),
+                            Some(c) => bail!("illegal character {c:?} while lexing a number"),
+                            None => bail!("Unexpected end of file while lexing a number"),
                         }
                     }
 
@@ -461,8 +464,8 @@ impl LexImplementation for LexLinear {
                                 // All other legal characters
                                 #[allow(clippy::match_same_arms)]
                                 Some(10 | 32..=126) => break,
-                                Some(c) => bail!("Illegal character {c:?} while parsing a number"),
-                                None => bail!("Unexpected end of file while parsing a number"),
+                                Some(c) => bail!("illegal character {c:?} while lexing a number"),
+                                None => bail!("Unexpected end of file while lexing a number"),
                             }
                         }
 
@@ -485,8 +488,8 @@ impl LexImplementation for LexLinear {
                             Some(b'"') => break,
                             Some(b'\n') => bail!("newline found in string literal"),
                             Some(32..=126) => current_index += 1,
-                            Some(c) => bail!("Illegal character {c:?} while parsing a string"),
-                            None => bail!("Unexpected end of file while parsing a string"),
+                            Some(c) => bail!("illegal character {c:?} while lexing a string"),
+                            None => bail!("Unexpected end of file while lexing a string"),
                         }
                     }
 
@@ -502,7 +505,7 @@ impl LexImplementation for LexLinear {
                                 current_index += 1;
                             }
                             None | Some(10 | 32..=126) => break,
-                            Some(c) => bail!("Illegal character {c:?} while parsing a variable"),
+                            Some(c) => bail!("illegal character {c:?} while lexing a variable"),
                         }
                     }
 
@@ -554,7 +557,16 @@ impl LexImplementation for LexLinear {
                         input_by_token.push(&str_input[index..index + 2]);
                         index += 2;
                     } else {
-                        bail!("Unexpected single '&' found while parsing");
+                        bail!("Unexpected single '&' found while lexing");
+                    }
+                }
+                Some(b'|') => {
+                    if let Some(b'|') = input.get(index + 1) {
+                        acc.push(Token::OP(Op::Or));
+                        input_by_token.push(&str_input[index..index + 2]);
+                        index += 2;
+                    } else {
+                        bail!("Unexpected single '|' found while lexing");
                     }
                 }
                 Some(b'=') => {
@@ -657,7 +669,7 @@ impl LexImplementation for LexLinear {
                 }
                 // All other legal characters
                 // Some(32..=126) => {}
-                Some(c) => bail!("Illegal character '{}' found while parsing", *c as char),
+                Some(c) => bail!("illegal character '{}' found while lexing", *c as char),
             }
 
             #[cfg(test)]
