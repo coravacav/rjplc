@@ -95,22 +95,23 @@ fn main() {
     };
 
     if !parse {
-        let output = {
-            measure!("out");
-            use std::fmt::Write;
-            let mut output = String::new();
-
-            for token in &tokens {
-                writeln!(output, "{token}").unwrap();
-            }
-            writeln!(output, "Compilation succeeded").unwrap();
-
-            output
-        };
-
         if !quiet {
-            measure!("write output");
             use std::io::Write;
+
+            let output = {
+                measure!("out");
+                use std::fmt::Write;
+                let mut output = String::new();
+
+                for token in &tokens {
+                    writeln!(output, "{token}").unwrap();
+                }
+                writeln!(output, "Compilation succeeded").unwrap();
+
+                output
+            };
+
+            measure!("write output");
             stdout().write_all(output.as_bytes()).unwrap();
         }
 
@@ -135,22 +136,23 @@ fn main() {
     };
 
     if !typecheck {
-        let output = {
-            measure!("out");
-            use std::fmt::Write;
-            let mut output = String::new();
-
-            for parsed in &parsed {
-                writeln!(output, "{parsed}").unwrap();
-            }
-            writeln!(output, "Compilation succeeded").unwrap();
-
-            output
-        };
-
         if !quiet {
-            measure!("write output");
             use std::io::Write;
+
+            let output = {
+                measure!("out");
+                use std::fmt::Write;
+                let mut output = String::new();
+
+                for parsed in &parsed {
+                    writeln!(output, "{parsed}").unwrap();
+                }
+                writeln!(output, "Compilation succeeded").unwrap();
+
+                output
+            };
+
+            measure!("write output");
             stdout().write_all(output.as_bytes()).unwrap();
         }
 
