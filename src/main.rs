@@ -1,6 +1,6 @@
 #![deny(clippy::pedantic)]
 
-use std::{io::stdout, path::PathBuf, process::exit, time::Instant};
+use std::{io::stdout, path::PathBuf, process::exit};
 
 use clap::Parser;
 use lex::LexImplementation;
@@ -29,7 +29,8 @@ struct Cli {
 
 #[allow(clippy::too_many_lines)]
 fn main() {
-    let now = Instant::now();
+    #[cfg(feature = "measure")]
+    let now = std::time::Instant::now();
 
     #[allow(unused_mut)]
     let Cli {
