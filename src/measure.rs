@@ -1,13 +1,19 @@
-use std::{cell::RefCell, collections::HashMap, str::FromStr, time::Instant};
+use std::{
+    cell::{Cell, RefCell},
+    collections::HashMap,
+    str::FromStr,
+    time::Instant,
+};
 
 thread_local! {
-    // pub(crate) static SUM_TIMINGS_MAP: RefCell<HashMap<&'static str, u128>> = RefCell::new(HashMap::new());
-    pub(crate) static CURRENT_TIMINGS_STACK: RefCell<Vec<&'static str>> = const { RefCell::new(vec![]) };
-    pub(crate) static TREE_TIMINGS: RefCell<HashMap<u8, HashMap<String, u128>>> = RefCell::new(HashMap::new());
+    pub static SUM_TIMINGS_MAP: RefCell<HashMap<&'static str, u128>> = RefCell::new(HashMap::new());
+    pub static CURRENT_TIMINGS_STACK: RefCell<Vec<&'static str>> = const { RefCell::new(vec![]) };
+    pub static TREE_TIMINGS: RefCell<HashMap<u8, HashMap<String, u128>>> = RefCell::new(HashMap::new());
+    static MEASURE_ITERATIONS: Cell<u128> = const { Cell::new(1) };
 }
 
 pub struct MeasureHandle {
-    // pub name: &'static str,
+    pub name: &'static str,
     pub start: Instant,
 }
 
@@ -15,9 +21,9 @@ impl Drop for MeasureHandle {
     fn drop(&mut self) {
         let elapsed = self.start.elapsed().as_nanos();
 
-        // SUM_TIMINGS_MAP.with(|timings_map| {
-        //     *timings_map.borrow_mut().entry(self.name).or_insert(0) += elapsed;
-        // });
+        SUM_TIMINGS_MAP.with(|timings_map| {
+            *timings_map.borrow_mut().entry(self.name).or_insert(0) += elapsed;
+        });
 
         CURRENT_TIMINGS_STACK.with(|stack| {
             TREE_TIMINGS.with(|timings_map| {
@@ -47,12 +53,16 @@ impl Drop for MeasureHandle {
     }
 }
 
+pub fn set_measure_iterations(iterations: u128) {
+    MEASURE_ITERATIONS.with(|i| i.set(iterations));
+}
+
 #[macro_export]
 macro_rules! measure {
     ($name:expr) => {
         #[cfg(feature = "measure")]
         let _measure = $crate::measure::MeasureHandle {
-            // name: $name,
+            name: $name,
             start: std::time::Instant::now(),
         };
         #[cfg(feature = "measure")]
@@ -62,11 +72,16 @@ macro_rules! measure {
     };
 }
 
+#[allow(clippy::too_many_lines)]
 pub fn print_timings() {
-    // #[cfg(feature = "measure")]
+    #[cfg(feature = "measure")]
     {
         use colored::Colorize;
         use itertools::Itertools;
+
+        if let reps @ 2.. = MEASURE_ITERATIONS.with(|i| i.get()) {
+            println!("Repeated measurements {} times", reps);
+        }
 
         TREE_TIMINGS.with(|timings_map| {
             fn get_children(
@@ -100,14 +115,21 @@ pub fn print_timings() {
                     let children = get_children(map, level + 1, name);
 
                     let time = if children.is_empty() {
-                        dur::Duration::from_nanos(*elapsed).to_string()
+                        dur::Duration::from_nanos(*elapsed / MEASURE_ITERATIONS.with(|i| i.get()))
+                            .to_string()
                     } else {
                         format!(
                             "{} {}",
                             dur::Duration::from_nanos(
-                                *elapsed - children.iter().map(|(_, e)| *e).sum::<u128>(),
+                                *elapsed
+                                    - children.iter().map(|(_, e)| *e).sum::<u128>()
+                                        / MEASURE_ITERATIONS.with(|i| i.get()),
                             ),
-                            dur::Duration::from_nanos(*elapsed).to_string().dimmed()
+                            dur::Duration::from_nanos(
+                                *elapsed / MEASURE_ITERATIONS.with(|i| i.get())
+                            )
+                            .to_string()
+                            .dimmed()
                         )
                     };
 
@@ -165,6 +187,18 @@ pub fn print_timings() {
                 &col_widths,
                 1,
             );
+        });
+
+        SUM_TIMINGS_MAP.with(|timings_map| {
+            let timings_map = timings_map.borrow();
+            let mut timings_map = timings_map.iter().collect_vec();
+            timings_map.sort_by(|a, b| b.1.cmp(&a.1));
+            for (name, elapsed) in timings_map {
+                println!(
+                    "{name} {}",
+                    dur::Duration::from_nanos(*elapsed / MEASURE_ITERATIONS.with(|i| i.get()))
+                );
+            }
         });
     }
 }

@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{fmt::Write, path::Path};
 
 use color_eyre::eyre::{bail, Result};
 use colored::Colorize;
@@ -6,11 +6,9 @@ use itertools::Itertools;
 
 use crate::{
     lex::{Op, Token},
-    measure, undo_slice_by_cuts, UndoSliceSelection,
+    measure, undo_slice_by_cuts, CustomDisplay, UndoSliceSelection,
 };
 
-#[cfg(test)]
-use crate::lex::LexImplementation;
 #[cfg(test)]
 use crate::measure::print_timings;
 #[cfg(test)]
@@ -21,16 +19,16 @@ trait Consume<'a, 'b>: Sized {
 }
 
 trait PrintJoined {
-    fn print_joined(&self, f: &mut std::fmt::Formatter<'_>, sep: &str) -> std::fmt::Result;
+    fn print_joined(&self, f: &mut String, string_map: &[&str], sep: &str) -> std::fmt::Result;
 }
 
-impl<T: std::fmt::Display + std::fmt::Debug> PrintJoined for [T] {
-    fn print_joined(&self, f: &mut std::fmt::Formatter<'_>, sep: &str) -> std::fmt::Result {
+impl<T: CustomDisplay> PrintJoined for [T] {
+    fn print_joined(&self, f: &mut String, string_map: &[&str], sep: &str) -> std::fmt::Result {
         for (i, t) in self.iter().enumerate() {
             if i != 0 {
-                write!(f, "{sep}")?;
+                f.write_str(sep)?;
             }
-            write!(f, "{t}")?;
+            t.fmt(f, string_map)?;
         }
 
         Ok(())
@@ -92,8 +90,8 @@ macro_rules! consume {
 fn consume_list<'a, 'b, T: Consume<'a, 'b> + std::fmt::Debug>(
     mut parser: Parser,
     data: &'b StaticParserData<'a>,
-    end_token: Token<'a>,
-    delimeter: Token<'a>,
+    end_token: Token,
+    delimeter: Token,
     delimeter_terminated: bool,
 ) -> ParseResult<'a, Vec<T>> {
     let mut list = vec![];
@@ -197,9 +195,9 @@ macro_rules! check {
 
 macro_rules! localize_error {
     ($parser:ident, $data:ident, $ty:ty, $function_body:expr) => {{
-        fn inner_func<'a, 'b>(
+        fn inner_func<'a>(
             mut $parser: Parser,
-            $data: &'b StaticParserData<'a>,
+            $data: &StaticParserData<'a>,
         ) -> ParseResult<'a, $ty> {
             $function_body
         }
@@ -227,7 +225,8 @@ struct Parser {
 }
 
 struct StaticParserData<'a> {
-    original_tokens: &'a [Token<'a>],
+    original_tokens: &'a [Token],
+    string_map: &'a [&'a str],
     input_by_token: &'a [&'a str],
     source: &'a str,
 }
@@ -250,7 +249,7 @@ impl<'a, 'b> Parser {
         self
     }
 
-    fn check_skip(self, data: &'b StaticParserData<'a>, token: Token<'a>) -> ParseResult<'a, ()> {
+    fn check_skip(self, data: &'b StaticParserData<'a>, token: Token) -> ParseResult<'a, ()> {
         debug_assert_ne!(token, Token::END_OF_FILE);
         if self.check_one(data, token) {
             ParseResult::Parsed(self.skip_one(), ())
@@ -263,17 +262,17 @@ impl<'a, 'b> Parser {
         }
     }
 
-    fn check_one(self, data: &StaticParserData<'a>, token: Token<'a>) -> bool {
+    fn check_one(self, data: &StaticParserData<'a>, token: Token) -> bool {
         self.first(data) == token
     }
 
-    fn first(self, data: &StaticParserData<'a>) -> Token<'a> {
+    fn first(self, data: &StaticParserData<'a>) -> Token {
         debug_assert!(data.original_tokens.get(self.current_position).is_some());
         // SAFETY: EOF is always at the end and we never check for EOF
         unsafe { *data.original_tokens.get_unchecked(self.current_position) }
     }
 
-    fn next(self, data: &StaticParserData<'a>) -> (Self, Token<'a>) {
+    fn next(self, data: &StaticParserData<'a>) -> (Self, Token) {
         let next = self.first(data);
         (self.skip_one(), next)
     }
@@ -388,42 +387,38 @@ impl<'a, 'b> Parser {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct Variable<'a>(&'a str);
+pub struct Variable(usize);
 
-impl std::fmt::Display for Variable<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.0)
+impl CustomDisplay for Variable {
+    fn fmt(&self, f: &mut String, string_map: &[&str]) -> std::fmt::Result {
+        f.write_str(string_map[self.0])
     }
 }
 
-impl<'a, 'b> Consume<'a, 'b> for Variable<'a> {
+impl<'a, 'b> Consume<'a, 'b> for Variable {
     fn consume(parser: Parser, data: &'b StaticParserData<'a>) -> ParseResult<'a, Self> {
         measure!("variable");
         let (parser, s) = match parser.next(data) {
             (parser, Token::VARIABLE(s)) => (parser, s),
-            (_, t) => miss!(parser, "expected variable, found {}", t),
+            (_, t) => miss!(parser, "expected variable, found {:?}", t),
         };
 
         parser.complete(Self(s))
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct LiteralString<'a>(&'a str);
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LiteralString(usize);
 
-impl PartialEq for LiteralString<'_> {
-    fn eq(&self, other: &Self) -> bool {
-        self.0.as_ptr() == other.0.as_ptr()
+impl CustomDisplay for LiteralString {
+    fn fmt(&self, f: &mut String, string_map: &[&str]) -> std::fmt::Result {
+        f.write_char('"')?;
+        f.write_str(string_map[self.0])?;
+        f.write_char('"')
     }
 }
 
-impl std::fmt::Display for LiteralString<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "\"{}\"", self.0)
-    }
-}
-
-impl<'a, 'b> Consume<'a, 'b> for LiteralString<'a> {
+impl<'a, 'b> Consume<'a, 'b> for LiteralString {
     fn consume(parser: Parser, data: &'b StaticParserData<'a>) -> ParseResult<'a, Self> {
         measure!("string_lit");
         let s = match parser.first(data) {
@@ -436,18 +431,20 @@ impl<'a, 'b> Consume<'a, 'b> for LiteralString<'a> {
 }
 
 #[derive(Debug, Clone)]
-pub struct LoopField<'a>(Variable<'a>, Expr<'a>);
+pub struct LoopField(Variable, Expr);
 
-impl std::fmt::Display for LoopField<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} {}", self.0, self.1)
+impl CustomDisplay for LoopField {
+    fn fmt(&self, f: &mut String, string_map: &[&str]) -> std::fmt::Result {
+        self.0.fmt(f, string_map)?;
+        f.write_char(' ')?;
+        self.1.fmt(f, string_map)
     }
 }
 
-impl<'a, 'b> Consume<'a, 'b> for LoopField<'a> {
+impl<'a, 'b> Consume<'a, 'b> for LoopField {
     fn consume(parser: Parser, data: &'b StaticParserData<'a>) -> ParseResult<'a, Self> {
         measure!("arraySumField");
-        localize_error!(parser, data, LoopField<'a>, {
+        localize_error!(parser, data, LoopField, {
             consume!(parser, data, Variable, s);
             check!(parser, data, COLON);
             consume!(parser, data, Expr, expr);
@@ -457,18 +454,20 @@ impl<'a, 'b> Consume<'a, 'b> for LoopField<'a> {
 }
 
 #[derive(Debug, Clone)]
-pub struct Field<'a>(Variable<'a>, Type<'a>);
+pub struct Field(Variable, Type);
 
-impl std::fmt::Display for Field<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} {}", self.0, self.1)
+impl CustomDisplay for Field {
+    fn fmt(&self, f: &mut String, string_map: &[&str]) -> std::fmt::Result {
+        self.0.fmt(f, string_map)?;
+        f.write_char(' ')?;
+        self.1.fmt(f, string_map)
     }
 }
 
-impl<'a, 'b> Consume<'a, 'b> for Field<'a> {
+impl<'a, 'b> Consume<'a, 'b> for Field {
     fn consume(parser: Parser, data: &'b StaticParserData<'a>) -> ParseResult<'a, Self> {
         measure!("field");
-        localize_error!(parser, data, Field<'a>, {
+        localize_error!(parser, data, Field, {
             consume!(parser, data, Variable, s);
             check!(parser, data, COLON);
             consume!(parser, data, Type, ty);
@@ -478,20 +477,20 @@ impl<'a, 'b> Consume<'a, 'b> for Field<'a> {
 }
 
 #[derive(Debug, Clone)]
-pub enum Cmd<'a> {
-    Read(LiteralString<'a>, LValue<'a>),
-    Write(Expr<'a>, LiteralString<'a>),
-    Let(LValue<'a>, Expr<'a>),
-    Assert(Expr<'a>, LiteralString<'a>),
-    Print(LiteralString<'a>),
-    Show(Expr<'a>),
-    Time(Box<Cmd<'a>>),
-    Fn(Variable<'a>, Vec<Binding<'a>>, Type<'a>, Vec<Statement<'a>>),
-    Type(Variable<'a>, Type<'a>),
-    Struct(Variable<'a>, Vec<Field<'a>>),
+pub enum Cmd {
+    Read(LiteralString, LValue),
+    Write(Expr, LiteralString),
+    Let(LValue, Expr),
+    Assert(Expr, LiteralString),
+    Print(LiteralString),
+    Show(Expr),
+    Time(Box<Cmd>),
+    Fn(Variable, Vec<Binding>, Type, Vec<Statement>),
+    Type(Variable, Type),
+    Struct(Variable, Vec<Field>),
 }
 
-impl<'a, 'b> Consume<'a, 'b> for Cmd<'a> {
+impl<'a, 'b> Consume<'a, 'b> for Cmd {
     fn consume(parser: Parser, data: &'b StaticParserData<'a>) -> ParseResult<'a, Self> {
         measure!("cmd");
         match parser.next(data) {
@@ -569,60 +568,120 @@ impl<'a, 'b> Consume<'a, 'b> for Cmd<'a> {
     }
 }
 
-impl std::fmt::Display for Cmd<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl CustomDisplay for Cmd {
+    fn fmt(&self, f: &mut String, string_map: &[&str]) -> std::fmt::Result {
         match self {
-            Cmd::Read(file, lvalue) => write!(f, "(ReadCmd {file} {lvalue})"),
-            Cmd::Write(expr, file) => write!(f, "(WriteCmd {expr} {file})"),
-            Cmd::Let(lvalue, expr) => write!(f, "(LetCmd {lvalue} {expr})"),
-            Cmd::Assert(expr, msg) => write!(f, "(AssertCmd {expr} {msg})"),
-            Cmd::Print(msg) => write!(f, "(PrintCmd {msg})"),
-            Cmd::Show(expr) => write!(f, "(ShowCmd {expr})"),
-            Cmd::Time(cmd) => write!(f, "(TimeCmd {cmd})"),
+            Cmd::Read(file, lvalue) => {
+                f.write_str("(ReadCmd ")?;
+                file.fmt(f, string_map)?;
+                f.write_char(' ')?;
+                lvalue.fmt(f, string_map)?;
+                f.write_char(')')
+            }
+            Cmd::Write(expr, file) => {
+                f.write_str("(WriteCmd ")?;
+                expr.fmt(f, string_map)?;
+                f.write_char(' ')?;
+                file.fmt(f, string_map)?;
+                f.write_char(')')
+            }
+            Cmd::Let(lvalue, expr) => {
+                f.write_str("(LetCmd ")?;
+                lvalue.fmt(f, string_map)?;
+                f.write_char(' ')?;
+                expr.fmt(f, string_map)?;
+                f.write_char(')')
+            }
+            Cmd::Assert(expr, msg) => {
+                f.write_str("(AssertCmd ")?;
+                expr.fmt(f, string_map)?;
+                f.write_char(' ')?;
+                msg.fmt(f, string_map)?;
+                f.write_char(')')
+            }
+            Cmd::Print(msg) => {
+                f.write_str("(PrintCmd ")?;
+                msg.fmt(f, string_map)?;
+                f.write_char(')')
+            }
+            Cmd::Show(expr) => {
+                f.write_str("(ShowCmd ")?;
+                expr.fmt(f, string_map)?;
+                f.write_char(')')
+            }
+            Cmd::Time(cmd) => {
+                f.write_str("(TimeCmd ")?;
+                cmd.fmt(f, string_map)?;
+                f.write_char(')')
+            }
             Cmd::Fn(name, bindings, ty, statements) => {
-                write!(f, "(FnCmd {name} ((",)?;
-                bindings.print_joined(f, " ")?;
-                write!(f, ")) {ty} ")?;
-                statements.print_joined(f, " ")?;
-                write!(f, ")")
+                f.write_str("(FnCmd ")?;
+                name.fmt(f, string_map)?;
+                f.write_str(" ((")?;
+                bindings.print_joined(f, string_map, " ")?;
+                f.write_str(")) ")?;
+                ty.fmt(f, string_map)?;
+                f.write_char(' ')?;
+                statements.print_joined(f, string_map, " ")?;
+                f.write_char(')')
             }
             Cmd::Type(name, ty) => {
-                write!(f, "(TypeCmd {name} {ty})")
+                f.write_str("(TypeCmd ")?;
+                name.fmt(f, string_map)?;
+                f.write_char(' ')?;
+                ty.fmt(f, string_map)?;
+                f.write_char(')')
             }
             Cmd::Struct(name, fields) => {
-                if fields.is_empty() {
-                    write!(f, "(StructCmd {name})")
-                } else {
-                    write!(f, "(StructCmd {name} ")?;
-                    fields.print_joined(f, " ")?;
-                    write!(f, ")")
+                f.write_str("(StructCmd ")?;
+                name.fmt(f, string_map)?;
+                if !fields.is_empty() {
+                    f.write_char(' ')?;
+                    fields.print_joined(f, string_map, " ")?;
                 }
+                f.write_char(')')
             }
         }
     }
 }
 
 #[derive(Debug, Clone)]
-pub enum Statement<'a> {
-    Let(LValue<'a>, Expr<'a>),
-    Assert(Expr<'a>, LiteralString<'a>),
-    Return(Expr<'a>),
+pub enum Statement {
+    Let(LValue, Expr),
+    Assert(Expr, LiteralString),
+    Return(Expr),
 }
 
-impl std::fmt::Display for Statement<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl CustomDisplay for Statement {
+    fn fmt(&self, f: &mut String, string_map: &[&str]) -> std::fmt::Result {
         match self {
-            Statement::Let(lvalue, expr) => write!(f, "(LetStmt {lvalue} {expr})"),
-            Statement::Assert(expr, msg) => write!(f, "(AssertStmt {expr} {msg})"),
-            Statement::Return(expr) => write!(f, "(ReturnStmt {expr})"),
+            Statement::Let(lvalue, expr) => {
+                f.write_str("(LetStmt ")?;
+                lvalue.fmt(f, string_map)?;
+                f.write_char(' ')?;
+                expr.fmt(f, string_map)?;
+                f.write_char(')')
+            }
+            Statement::Assert(expr, msg) => {
+                f.write_str("(AssertStmt ")?;
+                expr.fmt(f, string_map)?;
+                f.write_char(' ')?;
+                msg.fmt(f, string_map)?;
+                f.write_char(')')
+            }
+            Statement::Return(expr) => {
+                f.write_str("(ReturnStmt ")?;
+                expr.fmt(f, string_map)?;
+                f.write_char(')')
+            }
         }
     }
 }
 
-impl<'a, 'b> Consume<'a, 'b> for Statement<'a> {
+impl<'a, 'b> Consume<'a, 'b> for Statement {
     fn consume(parser: Parser, data: &'b StaticParserData<'a>) -> ParseResult<'a, Self> {
         measure!("statement");
-        localize_error!(parser, data, Statement<'a>, {
+        localize_error!(parser, data, Statement, {
             match parser.first(data) {
                 Token::ASSERT => {
                     parser = parser.skip_one();
@@ -653,28 +712,26 @@ impl<'a, 'b> Consume<'a, 'b> for Statement<'a> {
 }
 
 #[derive(Debug, Clone)]
-pub enum Expr<'a> {
-    // temporary
-    #[allow(dead_code)]
-    Int(i64, &'a str),
-    Float(f64, &'a str),
+pub enum Expr {
+    Int(i64, usize),
+    Float(f64, usize),
     True,
     False,
     Void,
-    Variable(&'a str),
-    ArrayLiteral(Vec<Expr<'a>>),
-    TupleLiteral(Vec<Expr<'a>>),
-    Paren(Box<Expr<'a>>),
-    ArrayIndex(Box<Expr<'a>>, Vec<Expr<'a>>),
-    Binop(Box<Expr<'a>>, Op, Box<Expr<'a>>),
-    Call(Variable<'a>, Vec<Expr<'a>>),
-    TupleIndex(Box<Expr<'a>>, Vec<Expr<'a>>),
-    StructLiteral(Variable<'a>, Vec<Expr<'a>>),
-    Dot(Box<Expr<'a>>, Variable<'a>),
-    Unop(Op, Box<Expr<'a>>),
-    If(Box<Expr<'a>>, Box<Expr<'a>>, Box<Expr<'a>>),
-    ArrayLoop(Vec<LoopField<'a>>, Box<Expr<'a>>),
-    SumLoop(Vec<LoopField<'a>>, Box<Expr<'a>>),
+    Variable(Variable),
+    ArrayLiteral(Vec<Expr>),
+    TupleLiteral(Vec<Expr>),
+    Paren(Box<Expr>),
+    ArrayIndex(Box<Expr>, Vec<Expr>),
+    Binop(Box<Expr>, Op, Box<Expr>),
+    Call(Variable, Vec<Expr>),
+    TupleIndex(Box<Expr>, Vec<Expr>),
+    StructLiteral(Variable, Vec<Expr>),
+    Dot(Box<Expr>, Variable),
+    Unop(Op, Box<Expr>),
+    If(Box<Expr>, Box<Expr>, Box<Expr>),
+    ArrayLoop(Vec<LoopField>, Box<Expr>),
+    SumLoop(Vec<LoopField>, Box<Expr>),
 }
 
 const fn op_precedence(op: Op) -> u8 {
@@ -687,7 +744,7 @@ const fn op_precedence(op: Op) -> u8 {
     }
 }
 
-impl Expr<'_> {
+impl Expr {
     const UNOP_PRECEDENCE: u8 = 6;
 
     const fn precedence(&self) -> u8 {
@@ -701,19 +758,19 @@ impl Expr<'_> {
     }
 }
 
-impl std::fmt::Display for Expr<'_> {
+impl CustomDisplay for Expr {
     #[allow(clippy::too_many_lines)]
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut String, string_map: &[&str]) -> std::fmt::Result {
         match self {
             Expr::Int(_, i) => write!(f, "(IntExpr {})", {
-                let i = i.trim_start_matches('0');
+                let i = string_map[*i].trim_start_matches('0');
                 if i.is_empty() {
                     "0"
                 } else {
                     i
                 }
             }),
-            Expr::Float(fl, s_fl) => s_fl
+            Expr::Float(fl, s_fl) => string_map[*s_fl]
                 .split_once('.')
                 .map(|(trunc, _)| {
                     let trunc = trunc.trim_start_matches('0');
@@ -729,89 +786,115 @@ impl std::fmt::Display for Expr<'_> {
             Expr::True => write!(f, "(TrueExpr)"),
             Expr::False => write!(f, "(FalseExpr)"),
             Expr::Void => write!(f, "(VoidExpr)"),
-            Expr::Variable(s) => write!(f, "(VarExpr {s})"),
-            Expr::Paren(expr) => write!(f, "{expr}"),
+            Expr::Variable(s) => {
+                f.write_str("(VarExpr ")?;
+                s.fmt(f, string_map)?;
+                f.write_char(')')
+            }
+            Expr::Paren(expr) => expr.fmt(f, string_map),
             Expr::ArrayLiteral(exprs) => {
                 if exprs.is_empty() {
-                    write!(f, "(ArrayLiteralExpr)")
+                    f.write_str("(ArrayLiteralExpr)")
                 } else {
-                    write!(f, "(ArrayLiteralExpr ")?;
-                    exprs.print_joined(f, " ")?;
-                    write!(f, ")")
+                    f.write_str("(ArrayLiteralExpr ")?;
+                    exprs.print_joined(f, string_map, " ")?;
+                    f.write_char(')')
                 }
             }
             Expr::TupleLiteral(exprs) => {
-                write!(f, "(TupleLiteralExpr ")?;
-                exprs.print_joined(f, " ")?;
-                write!(f, ")")
+                f.write_str("(TupleLiteralExpr ")?;
+                exprs.print_joined(f, string_map, " ")?;
+                f.write_char(')')
             }
             Expr::ArrayIndex(s, exprs) => {
-                if exprs.is_empty() {
-                    write!(f, "(ArrayIndexExpr {s})")
-                } else {
-                    write!(f, "(ArrayIndexExpr {s} ")?;
-                    exprs.print_joined(f, " ")?;
-                    write!(f, ")")
+                f.write_str("(ArrayIndexExpr ")?;
+                s.fmt(f, string_map)?;
+                if !exprs.is_empty() {
+                    f.write_char(' ')?;
+                    exprs.print_joined(f, string_map, " ")?;
                 }
-            }
-            Expr::TupleIndex(s, exprs) => {
-                write!(f, "(TupleIndexExpr {s} ")?;
-                exprs.print_joined(f, " ")?;
                 write!(f, ")")
             }
+            Expr::TupleIndex(s, exprs) => {
+                f.write_str("(TupleIndexExpr ")?;
+                s.fmt(f, string_map)?;
+                f.write_char(' ')?;
+                exprs.print_joined(f, string_map, " ")?;
+                f.write_char(')')
+            }
             Expr::Binop(expr, op, expr2) => {
-                write!(f, "(BinopExpr {expr} {op} {expr2})")
+                f.write_str("(BinopExpr ")?;
+                expr.fmt(f, string_map)?;
+                f.write_char(' ')?;
+                op.fmt(f, string_map)?;
+                f.write_char(' ')?;
+                expr2.fmt(f, string_map)?;
+                f.write_char(')')
             }
             Expr::Call(expr, exprs) => {
-                if exprs.is_empty() {
-                    write!(f, "(CallExpr {expr})")
-                } else {
-                    write!(f, "(CallExpr {expr} ")?;
-                    exprs.print_joined(f, " ")?;
-                    write!(f, ")")
+                f.write_str("(CallExpr ")?;
+                expr.fmt(f, string_map)?;
+                if !exprs.is_empty() {
+                    f.write_char(' ')?;
+                    exprs.print_joined(f, string_map, " ")?;
                 }
+                write!(f, ")")
             }
             Expr::StructLiteral(s, exprs) => {
-                if exprs.is_empty() {
-                    write!(f, "(StructLiteralExpr {s})")
-                } else {
-                    write!(f, "(StructLiteralExpr {s} ")?;
-                    exprs.print_joined(f, " ")?;
-                    write!(f, ")")
+                f.write_str("(StructLiteralExpr ")?;
+                s.fmt(f, string_map)?;
+                if !exprs.is_empty() {
+                    f.write_char(' ')?;
+                    exprs.print_joined(f, string_map, " ")?;
                 }
+                write!(f, ")")
             }
             Expr::Dot(expr, s) => {
-                write!(f, "(DotExpr {expr} {s})")
+                f.write_str("(DotExpr ")?;
+                expr.fmt(f, string_map)?;
+                f.write_char(' ')?;
+                s.fmt(f, string_map)?;
+                write!(f, ")")
             }
             Expr::Unop(op, expr) => {
-                write!(f, "(UnopExpr {op} {expr})")
+                f.write_str("(UnopExpr ")?;
+                op.fmt(f, string_map)?;
+                f.write_char(' ')?;
+                expr.fmt(f, string_map)?;
+                write!(f, ")")
             }
             Expr::If(expr, expr2, expr3) => {
-                write!(f, "(IfExpr {expr} {expr2} {expr3})")
+                f.write_str("(IfExpr ")?;
+                expr.fmt(f, string_map)?;
+                f.write_char(' ')?;
+                expr2.fmt(f, string_map)?;
+                f.write_char(' ')?;
+                expr3.fmt(f, string_map)?;
+                write!(f, ")")
             }
             Expr::ArrayLoop(fields, expr) => {
-                if fields.is_empty() {
-                    write!(f, "(ArrayLoopExpr {expr})")
-                } else {
-                    write!(f, "(ArrayLoopExpr ")?;
-                    fields.print_joined(f, " ")?;
-                    write!(f, " {expr})")
+                f.write_str("(ArrayLoopExpr ")?;
+                if !fields.is_empty() {
+                    fields.print_joined(f, string_map, " ")?;
+                    f.write_char(' ')?;
                 }
+                expr.fmt(f, string_map)?;
+                write!(f, ")")
             }
             Expr::SumLoop(fields, expr) => {
-                if fields.is_empty() {
-                    write!(f, "(SumLoopExpr {expr})")
-                } else {
-                    write!(f, "(SumLoopExpr ")?;
-                    fields.print_joined(f, " ")?;
-                    write!(f, " {expr})")
+                f.write_str("(SumLoopExpr ")?;
+                if !fields.is_empty() {
+                    fields.print_joined(f, string_map, " ")?;
+                    f.write_char(' ')?;
                 }
+                expr.fmt(f, string_map)?;
+                write!(f, ")")
             }
         }
     }
 }
 
-impl<'a, 'b> Consume<'a, 'b> for Expr<'a> {
+impl<'a, 'b> Consume<'a, 'b> for Expr {
     #[allow(clippy::too_many_lines)]
     fn consume(parser: Parser, data: &'b StaticParserData<'a>) -> ParseResult<'a, Self> {
         measure!("expr");
@@ -819,8 +902,8 @@ impl<'a, 'b> Consume<'a, 'b> for Expr<'a> {
             (mut parser, Token::OP(op @ (Op::Not | Op::Sub))) => {
                 fn rearrange_according_to_precedence(
                     op: Op,
-                    right_expr: Expr<'_>,
-                ) -> Expr<'_> {
+                    right_expr: Expr,
+                ) -> Expr {
                     if Expr::UNOP_PRECEDENCE < right_expr.precedence() {
                         Expr::Unop(op, Box::new(right_expr))
                     } else {
@@ -841,20 +924,22 @@ impl<'a, 'b> Consume<'a, 'b> for Expr<'a> {
                 consume!(parser, data, Expr, expr);
                 (parser, rearrange_according_to_precedence(op, expr))
             }
-            (parser, Token::INTVAL(s)) => {
+            (parser, Token::INTVAL(si)) => {
+                let s = data.string_map[si];
                 if let Ok(i) = s.parse::<i64>() {
-                    (parser, Expr::Int(i, s))
+                    (parser, Expr::Int(i, si))
                 } else {
                     miss!(parser, "couldn't parse integer {s}")
                 }
             }
-            (parser, Token::FLOATVAL(s)) => {
+            (parser, Token::FLOATVAL(si)) => {
+                let s = data.string_map[si];
                 if let Ok(f) = s.parse::<f64>() {
                     if !f.is_finite() {
                         miss!(parser, "expected a finite float, found {f}");
                     }
 
-                    (parser, Expr::Float(f, s))
+                    (parser, Expr::Float(f, si))
                 } else {
                     miss!(parser, "couldn't parse float {s}")
                 }
@@ -862,7 +947,7 @@ impl<'a, 'b> Consume<'a, 'b> for Expr<'a> {
             (parser, Token::VOID) => (parser, Expr::Void),
             (parser, Token::TRUE) => (parser, Expr::True),
             (parser, Token::FALSE) => (parser, Expr::False),
-            (parser, Token::VARIABLE(s)) => (parser, Expr::Variable(s)),
+            (parser, Token::VARIABLE(s)) => (parser, Expr::Variable(Variable(s))),
             (mut parser, Token::LSQUARE) => {
                 consume_list!(parser, data, RSQUARE, exprs);
                 (parser, Expr::ArrayLiteral(exprs))
@@ -909,11 +994,11 @@ impl<'a, 'b> Consume<'a, 'b> for Expr<'a> {
                 }
                 ((mut parser, Token::LPAREN), Expr::Variable(s)) => {
                     consume_list!(parser, data, RPAREN, exprs);
-                    (parser, Expr::Call(Variable(s), exprs))
+                    (parser, Expr::Call(*s, exprs))
                 }
                 ((mut parser, Token::LCURLY), Expr::Variable(s)) => {
                     consume_list!(parser, data, RCURLY, exprs);
-                    (parser, Expr::StructLiteral(Variable(s), exprs))
+                    (parser, Expr::StructLiteral(*s, exprs))
                 }
                 ((mut parser, Token::LCURLY), _) => {
                     consume_list!(parser, data, RCURLY, exprs);
@@ -924,11 +1009,11 @@ impl<'a, 'b> Consume<'a, 'b> for Expr<'a> {
                     (parser, Expr::Dot(Box::new(expr), var))
                 }
                 ((mut parser, Token::OP(op)), _) => {
-                    fn rearrange_according_to_precedence<'a>(
-                        new_expr: Expr<'a>,
+                    fn rearrange_according_to_precedence(
+                        new_expr: Expr,
                         op: Op,
-                        right_expr: Expr<'a>,
-                    ) -> Expr<'a> {
+                        right_expr: Expr,
+                    ) -> Expr {
                         if op_precedence(op) < right_expr.precedence() {
                             Expr::Binop(Box::new(new_expr), op, Box::new(right_expr))
                         } else {
@@ -961,31 +1046,37 @@ impl<'a, 'b> Consume<'a, 'b> for Expr<'a> {
 }
 
 #[derive(Debug, Clone)]
-pub enum LValue<'a> {
-    Var(Variable<'a>),
-    Array(Variable<'a>, Vec<Variable<'a>>),
-    Tuple(Vec<LValue<'a>>),
+pub enum LValue {
+    Var(Variable),
+    Array(Variable, Vec<Variable>),
+    Tuple(Vec<LValue>),
 }
 
-impl std::fmt::Display for LValue<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl CustomDisplay for LValue {
+    fn fmt(&self, f: &mut String, string_map: &[&str]) -> std::fmt::Result {
         match self {
-            LValue::Var(s) => write!(f, "(VarLValue {s})"),
+            LValue::Var(s) => {
+                f.write_str("(VarLValue ")?;
+                s.fmt(f, string_map)?;
+                write!(f, ")")
+            }
             LValue::Array(s, args) => {
-                write!(f, "(ArrayLValue {s} ")?;
-                args.print_joined(f, " ")?;
+                f.write_str("(ArrayLValue ")?;
+                s.fmt(f, string_map)?;
+                f.write_char(' ')?;
+                args.print_joined(f, string_map, " ")?;
                 write!(f, ")")
             }
             LValue::Tuple(lvs) => {
-                write!(f, "(TupleLValue ")?;
-                lvs.print_joined(f, " ")?;
+                f.write_str("(TupleLValue ")?;
+                lvs.print_joined(f, string_map, " ")?;
                 write!(f, ")")
             }
         }
     }
 }
 
-impl<'a, 'b> Consume<'a, 'b> for LValue<'a> {
+impl<'a, 'b> Consume<'a, 'b> for LValue {
     fn consume(parser: Parser, data: &'b StaticParserData<'a>) -> ParseResult<'a, Self> {
         measure!("lvalue");
         let (parser, lv) = match parser.next(data) {
@@ -1013,20 +1104,21 @@ impl<'a, 'b> Consume<'a, 'b> for LValue<'a> {
 }
 
 #[derive(Debug, Clone)]
-pub enum Type<'a> {
-    Struct(&'a str),
-    Array(Box<Type<'a>>, u8),
+pub enum Type {
+    // TODO maybe add wrapping type?
+    Struct(usize),
+    Array(Box<Type>, u8),
     Float,
     Int,
     Bool,
     Void,
-    Tuple(Vec<Type<'a>>),
+    Tuple(Vec<Type>),
 }
 
-impl PartialEq for Type<'_> {
+impl PartialEq for Type {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (Type::Struct(s), Type::Struct(o)) => s.as_ptr() == o.as_ptr(),
+            (Type::Struct(s), Type::Struct(o)) => s == o,
             (Type::Array(s, _), Type::Array(o, _)) => std::ptr::eq(&**s, &**o),
             (Type::Float, Type::Float)
             | (Type::Int, Type::Int)
@@ -1038,25 +1130,36 @@ impl PartialEq for Type<'_> {
     }
 }
 
-impl std::fmt::Display for Type<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl CustomDisplay for Type {
+    fn fmt(&self, f: &mut String, string_map: &[&str]) -> std::fmt::Result {
         match self {
-            Type::Struct(s) => write!(f, "(StructType {s})"),
-            Type::Array(s, i) => write!(f, "(ArrayType {s} {i})"),
-            Type::Float => write!(f, "(FloatType)"),
-            Type::Int => write!(f, "(IntType)"),
-            Type::Bool => write!(f, "(BoolType)"),
-            Type::Void => write!(f, "(VoidType)"),
+            Type::Struct(s) => {
+                f.write_str("(StructType ")?;
+                f.write_str(string_map[*s])?;
+                // s.fmt(f, string_map)?; Based on TODO above.
+                f.write_char(')')
+            }
+            Type::Array(s, i) => {
+                f.write_str("(ArrayType ")?;
+                s.fmt(f, string_map)?;
+                f.write_char(' ')?;
+                write!(f, "{i}")?;
+                f.write_char(')')
+            }
+            Type::Float => f.write_str("(FloatType)"),
+            Type::Int => f.write_str("(IntType)"),
+            Type::Bool => f.write_str("(BoolType)"),
+            Type::Void => f.write_str("(VoidType)"),
             Type::Tuple(tys) => {
-                write!(f, "(TupleType ")?;
-                tys.print_joined(f, " ")?;
-                write!(f, ")")
+                f.write_str("(TupleType ")?;
+                tys.print_joined(f, string_map, " ")?;
+                f.write_char(')')
             }
         }
     }
 }
 
-impl<'a, 'b> Consume<'a, 'b> for Type<'a> {
+impl<'a, 'b> Consume<'a, 'b> for Type {
     fn consume(parser: Parser, data: &'b StaticParserData<'a>) -> ParseResult<'a, Self> {
         measure!("type");
         let (mut parser, mut ty) = match parser.next(data) {
@@ -1108,22 +1211,26 @@ impl<'a, 'b> Consume<'a, 'b> for Type<'a> {
 }
 
 #[derive(Debug, Clone)]
-pub enum Binding<'a> {
-    Var(LValue<'a>, Type<'a>),
+pub enum Binding {
+    Var(LValue, Type),
 }
 
-impl std::fmt::Display for Binding<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl CustomDisplay for Binding {
+    fn fmt(&self, f: &mut String, string_map: &[&str]) -> std::fmt::Result {
         match self {
-            Binding::Var(s, ty) => write!(f, "{s} {ty}"),
+            Binding::Var(s, ty) => {
+                s.fmt(f, string_map)?;
+                f.write_char(' ')?;
+                ty.fmt(f, string_map)
+            }
         }
     }
 }
 
-impl<'a, 'b> Consume<'a, 'b> for Binding<'a> {
+impl<'a, 'b> Consume<'a, 'b> for Binding {
     fn consume(parser: Parser, data: &'b StaticParserData<'a>) -> ParseResult<'a, Self> {
         measure!("binding");
-        localize_error!(parser, data, Binding<'a>, {
+        localize_error!(parser, data, Binding, {
             consume!(parser, data, LValue, lv);
             check!(parser, data, COLON);
             consume!(parser, data, Type, ty);
@@ -1137,11 +1244,12 @@ impl<'a, 'b> Consume<'a, 'b> for Binding<'a> {
 /// # Errors
 /// Something
 pub fn parse<'a>(
-    tokens: &'a [Token<'a>],
+    tokens: &'a [Token],
     input_by_token: &'a [&'a str],
+    string_map: &'a [&'a str],
     source: &'a str,
     path: &'a Path,
-) -> Result<Vec<Cmd<'a>>> {
+) -> Result<Vec<Cmd>> {
     measure!("parse");
     let mut cmds = vec![];
 
@@ -1152,6 +1260,7 @@ pub fn parse<'a>(
     let data = StaticParserData {
         original_tokens: tokens,
         input_by_token,
+        string_map,
         source,
     };
 
@@ -1166,7 +1275,7 @@ pub fn parse<'a>(
                 // debug_assert_ne!(moved_parser, parser);
                 parser = moved_parser;
 
-                let cmd: Cmd<'a> = cmd;
+                let cmd: Cmd = cmd;
 
                 cmds.push(cmd);
             }
@@ -1213,9 +1322,10 @@ fn test_parse_correct() {
     let regex = Regex::new(r"\n\s+").unwrap();
 
     let tester = |file: &str, solution_file: &str| {
-        let (tokens, input_by_token) = crate::lex::LexNom::lex(file).expect("Lexing should work");
+        let (tokens, input_by_token, string_map) =
+            crate::lex::lex(file).expect("Lexing should work");
 
-        let parsed = match parse(&tokens, &input_by_token, file, Path::new("")) {
+        let parsed = match parse(&tokens, &input_by_token, &string_map, file, Path::new("")) {
             Ok(parsed) => parsed,
             Err(e) => {
                 panic!("Compilation failed {e}");
@@ -1225,8 +1335,8 @@ fn test_parse_correct() {
         let mut output = String::new();
 
         for parsed in parsed {
-            use std::fmt::Write;
-            writeln!(output, "{parsed}").unwrap();
+            parsed.fmt(&mut output, &string_map).unwrap();
+            output.push('\n');
         }
 
         if output == solution_file {
@@ -1250,11 +1360,11 @@ fn test_parse_correct() {
 #[test]
 fn test_parse_fails() {
     let tester = |file: &str, file_path: &Path| {
-        let Ok((tokens, input_by_tokens)) = crate::lex::LexNom::lex(file) else {
+        let Ok((tokens, input_by_tokens, string_map)) = crate::lex::lex(file) else {
             return;
         };
 
-        match parse(&tokens, &input_by_tokens, file, file_path) {
+        match parse(&tokens, &input_by_tokens, &string_map, file, file_path) {
             Ok(parsed) => {
                 println!("{parsed:?}");
                 panic!("expected parse to fail");

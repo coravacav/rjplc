@@ -3,9 +3,8 @@
 use std::{io::stdout, path::PathBuf, process::exit};
 
 use clap::Parser;
-use lex::LexImplementation;
 use measure::print_timings;
-use rjplc::{lex, measure, parse};
+use rjplc::{lex, measure, parse, CustomDisplay};
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -25,13 +24,15 @@ struct Cli {
 
     #[arg(short)]
     quiet: bool,
+
+    /// A flag to repeat each operation 100 times to help for accurate measurements
+    #[cfg(feature = "measure")]
+    #[arg(short, long, action = clap::ArgAction::Count)]
+    measure_repeat: u8,
 }
 
 #[allow(clippy::too_many_lines)]
 fn main() {
-    #[cfg(feature = "measure")]
-    let now = std::time::Instant::now();
-
     #[allow(unused_mut)]
     let Cli {
         path,
@@ -39,7 +40,18 @@ fn main() {
         mut parse,
         mut typecheck,
         quiet,
+        #[cfg(feature = "measure")]
+        measure_repeat,
     } = Cli::parse();
+
+    #[cfg(feature = "measure")]
+    let reps = if measure_repeat > 0 {
+        let reps = 10u128.pow(measure_repeat as u32);
+        measure::set_measure_iterations(reps);
+        reps - 1 // To make the division accurate.
+    } else {
+        0
+    };
 
     #[cfg(feature = "homework")]
     {
@@ -79,7 +91,7 @@ fn main() {
         return;
     }
 
-    let (tokens, input_by_token) = match lex::LexLinear::lex(&file) {
+    let (tokens, input_by_token, string_map) = match lex::lex(&file) {
         Ok(tokens) => tokens,
         #[allow(unused_variables)]
         Err(e) => {
@@ -94,6 +106,13 @@ fn main() {
         }
     };
 
+    #[cfg(feature = "measure")]
+    if measure_repeat > 0 {
+        for _ in 0..reps {
+            let _ = std::hint::black_box(lex::LexLinear::lex(&file));
+        }
+    }
+
     if !parse {
         if !quiet {
             use std::io::Write;
@@ -104,7 +123,8 @@ fn main() {
                 let mut output = String::new();
 
                 for token in &tokens {
-                    writeln!(output, "{token}").unwrap();
+                    token.fmt(&mut output, &string_map).unwrap();
+                    output.push('\n');
                 }
                 writeln!(output, "Compilation succeeded").unwrap();
 
@@ -120,7 +140,7 @@ fn main() {
         exit(0);
     }
 
-    let parsed = match parse::parse(&tokens, &input_by_token, &file, &path) {
+    let parsed = match parse::parse(&tokens, &input_by_token, &string_map, &file, &path) {
         Ok(tokens) => tokens,
         #[allow(unused_variables)]
         Err(e) => {
@@ -135,6 +155,13 @@ fn main() {
         }
     };
 
+    #[cfg(feature = "measure")]
+    if measure_repeat > 0 {
+        for _ in 0..reps {
+            let _ = std::hint::black_box(parse::parse(&tokens, &input_by_token, &file, &path));
+        }
+    }
+
     if !typecheck {
         if !quiet {
             use std::io::Write;
@@ -145,7 +172,8 @@ fn main() {
                 let mut output = String::new();
 
                 for parsed in &parsed {
-                    writeln!(output, "{parsed}").unwrap();
+                    parsed.fmt(&mut output, &string_map).unwrap();
+                    output.push('\n');
                 }
                 writeln!(output, "Compilation succeeded").unwrap();
 

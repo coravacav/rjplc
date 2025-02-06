@@ -166,3 +166,9 @@ fn test_solos(directory: &str, mut tester: impl FnMut(&str, &std::path::Path)) {
         }
     }
 }
+
+pub trait CustomDisplay {
+    /// # Errors
+    /// Normal `std::fmt::Result` error conditions on writes.
+    fn fmt(&self, f: &mut String, string_map: &[&str]) -> std::fmt::Result;
+}
