@@ -1,7 +1,6 @@
 use std::path::Path;
 
-use rjplc::lex::LexImplementation;
-use rjplc::{lex, parse};
+use rjplc::{lex, parse, CustomDisplay};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
@@ -47,7 +46,7 @@ pub fn perform_steps(contents: &str) -> Output {
         type_check_success: false,
     };
 
-    let (tokens, input_by_token) = match lex::LexLinear::lex(contents) {
+    let (tokens, input_by_token, string_map) = match lex::lex(contents) {
         Ok(tokens) => tokens,
         Err(e) => {
             successful_steps.lex_output = Some(format!("{e}"));
@@ -58,16 +57,24 @@ pub fn perform_steps(contents: &str) -> Output {
 
     successful_steps.lex_success = true;
 
-    use std::fmt::Write;
     let mut output = String::new();
 
     for token in &tokens {
-        writeln!(output, "{token}").expect("writing should always work");
+        token
+            .fmt(&mut output, &string_map)
+            .expect("writing should always work");
+        output.push('\n');
     }
 
     successful_steps.lex_output = Some(output);
 
-    let parsed = match parse::parse(&tokens, &input_by_token, contents, Path::new("textarea")) {
+    let parsed = match parse::parse(
+        &tokens,
+        &input_by_token,
+        &string_map,
+        contents,
+        Path::new("textarea"),
+    ) {
         Ok(parsed) => parsed,
         Err(e) => {
             successful_steps.parse_output = Some(format!("{e}"));
@@ -80,7 +87,10 @@ pub fn perform_steps(contents: &str) -> Output {
     let mut output = String::new();
 
     for parsed in parsed {
-        writeln!(output, "{parsed}").expect("writing should always work");
+        parsed
+            .fmt(&mut output, &string_map)
+            .expect("writing should always work");
+        output.push('\n');
     }
 
     successful_steps.parse_output = Some(output);

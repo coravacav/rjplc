@@ -950,6 +950,7 @@ impl<'a, 'b> Consume<'a, 'b> for Expr {
         let next = parser.next(data);
         let (mut parser, mut expr) = match (next.0, next.1.get_type()) {
             (mut parser, op @ (TokenType::Not | TokenType::Sub)) => {
+                measure!("unop");
                 fn rearrange_according_to_precedence(
                     op: Op,
                     right_expr: Expr,
@@ -1079,6 +1080,7 @@ impl<'a, 'b> Consume<'a, 'b> for Expr {
                     ),
                     _,
                 ) => {
+                    measure!("binop");
                     fn rearrange_according_to_precedence(
                         new_expr: Expr,
                         op: Op,

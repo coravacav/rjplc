@@ -109,7 +109,7 @@ fn main() {
     #[cfg(feature = "measure")]
     if measure_repeat > 0 {
         for _ in 0..reps {
-            let _ = std::hint::black_box(lex::LexLinear::lex(&file));
+            let _ = std::hint::black_box(lex::lex(&file));
         }
     }
 
@@ -158,7 +158,13 @@ fn main() {
     #[cfg(feature = "measure")]
     if measure_repeat > 0 {
         for _ in 0..reps {
-            let _ = std::hint::black_box(parse::parse(&tokens, &input_by_token, &file, &path));
+            let _ = std::hint::black_box(parse::parse(
+                &tokens,
+                &input_by_token,
+                &string_map,
+                &file,
+                &path,
+            ));
         }
     }
 
