@@ -5,7 +5,7 @@ use colored::Colorize;
 use itertools::Itertools;
 
 use crate::{
-    lex::{Op, Token},
+    lex::{Token, TokenType},
     measure, undo_slice_by_cuts, CustomDisplay, UndoSliceSelection,
 };
 
@@ -90,8 +90,8 @@ macro_rules! consume {
 fn consume_list<'a, 'b, T: Consume<'a, 'b> + std::fmt::Debug>(
     mut parser: Parser,
     data: &'b StaticParserData<'a>,
-    end_token: Token,
-    delimeter: Token,
+    end_token: TokenType,
+    delimeter: TokenType,
     delimeter_terminated: bool,
 ) -> ParseResult<'a, Vec<T>> {
     let mut list = vec![];
@@ -104,8 +104,8 @@ fn consume_list<'a, 'b, T: Consume<'a, 'b> + std::fmt::Debug>(
         list.push(t);
 
         match parser.first(data) {
-            t if t == delimeter => parser = parser.skip_one(),
-            t if !delimeter_terminated && t == end_token => {
+            t if t.get_type() == delimeter => parser = parser.skip_one(),
+            t if !delimeter_terminated && t.get_type() == end_token => {
                 parser = parser.skip_one();
                 return parser.complete(list);
             }
@@ -123,8 +123,8 @@ macro_rules! consume_list {
         let (advanced_parser, $outvar) = match consume_list(
             $parser,
             $data,
-            Token::$end_token,
-            Token::$delimeter,
+            TokenType::$end_token,
+            TokenType::$delimeter,
             $delimeter_terminated,
         ) {
             ParseResult::Parsed(parser, t) => {
@@ -165,7 +165,7 @@ macro_rules! consume_list {
 
 macro_rules! check {
     ($parser:ident, $data:ident, $token:tt) => {
-        let advanced_parser = match $parser.check_skip($data, Token::$token) {
+        let advanced_parser = match $parser.check_skip($data, TokenType::$token) {
             ParseResult::Parsed(parser, _) => (parser),
             ParseResult::NotParsed {
                 error_message,
@@ -249,8 +249,8 @@ impl<'a, 'b> Parser {
         self
     }
 
-    fn check_skip(self, data: &'b StaticParserData<'a>, token: Token) -> ParseResult<'a, ()> {
-        debug_assert_ne!(token, Token::END_OF_FILE);
+    fn check_skip(self, data: &'b StaticParserData<'a>, token: TokenType) -> ParseResult<'a, ()> {
+        debug_assert_ne!(token, TokenType::END_OF_FILE);
         if self.check_one(data, token) {
             ParseResult::Parsed(self.skip_one(), ())
         } else {
@@ -262,8 +262,8 @@ impl<'a, 'b> Parser {
         }
     }
 
-    fn check_one(self, data: &StaticParserData<'a>, token: Token) -> bool {
-        self.first(data) == token
+    fn check_one(self, data: &StaticParserData<'a>, token: TokenType) -> bool {
+        self.first(data).get_type() == token
     }
 
     fn first(self, data: &StaticParserData<'a>) -> Token {
@@ -272,8 +272,17 @@ impl<'a, 'b> Parser {
         unsafe { *data.original_tokens.get_unchecked(self.current_position) }
     }
 
+    fn first_type(self, data: &StaticParserData<'a>) -> TokenType {
+        self.first(data).get_type()
+    }
+
     fn next(self, data: &StaticParserData<'a>) -> (Self, Token) {
         let next = self.first(data);
+        (self.skip_one(), next)
+    }
+
+    fn next_type(self, data: &StaticParserData<'a>) -> (Self, TokenType) {
+        let next = self.first_type(data);
         (self.skip_one(), next)
     }
 
@@ -399,7 +408,7 @@ impl<'a, 'b> Consume<'a, 'b> for Variable {
     fn consume(parser: Parser, data: &'b StaticParserData<'a>) -> ParseResult<'a, Self> {
         measure!("variable");
         let (parser, s) = match parser.next(data) {
-            (parser, Token::VARIABLE(s)) => (parser, s),
+            (parser, t) if t.get_type() == TokenType::VARIABLE => (parser, t.get_index()),
             (_, t) => miss!(parser, "expected variable, found {:?}", t),
         };
 
@@ -422,7 +431,7 @@ impl<'a, 'b> Consume<'a, 'b> for LiteralString {
     fn consume(parser: Parser, data: &'b StaticParserData<'a>) -> ParseResult<'a, Self> {
         measure!("string_lit");
         let s = match parser.first(data) {
-            Token::STRING(s) => s,
+            t if t.get_type() == TokenType::STRING => t.get_index(),
             t => miss!(parser, "expected string, found {t:?}"),
         };
 
@@ -493,8 +502,8 @@ pub enum Cmd {
 impl<'a, 'b> Consume<'a, 'b> for Cmd {
     fn consume(parser: Parser, data: &'b StaticParserData<'a>) -> ParseResult<'a, Self> {
         measure!("cmd");
-        match parser.next(data) {
-            (mut parser, Token::READ) => {
+        match parser.next_type(data) {
+            (mut parser, TokenType::READ) => {
                 check!(parser, data, IMAGE);
                 consume!(parser, data, LiteralString, s);
                 check!(parser, data, TO);
@@ -502,30 +511,30 @@ impl<'a, 'b> Consume<'a, 'b> for Cmd {
                 check!(parser, data, NEWLINE);
                 parser.complete(Self::Read(s, lvalue))
             }
-            (mut parser, Token::TIME) => {
+            (mut parser, TokenType::TIME) => {
                 consume!(parser, data, Cmd, cmd);
                 parser.complete(Self::Time(Box::new(cmd)))
             }
-            (mut parser, Token::LET) => {
+            (mut parser, TokenType::LET) => {
                 consume!(parser, data, LValue, lvalue);
                 check!(parser, data, EQUALS);
                 consume!(parser, data, Expr, expr);
                 check!(parser, data, NEWLINE);
                 parser.complete(Self::Let(lvalue, expr))
             }
-            (mut parser, Token::ASSERT) => {
+            (mut parser, TokenType::ASSERT) => {
                 consume!(parser, data, Expr, expr);
                 check!(parser, data, COMMA);
                 consume!(parser, data, LiteralString, s);
                 check!(parser, data, NEWLINE);
                 parser.complete(Self::Assert(expr, s))
             }
-            (mut parser, Token::SHOW) => {
+            (mut parser, TokenType::SHOW) => {
                 consume!(parser, data, Expr, expr);
                 check!(parser, data, NEWLINE);
                 parser.complete(Self::Show(expr))
             }
-            (mut parser, Token::WRITE) => {
+            (mut parser, TokenType::WRITE) => {
                 check!(parser, data, IMAGE);
                 consume!(parser, data, Expr, expr);
                 check!(parser, data, TO);
@@ -533,12 +542,12 @@ impl<'a, 'b> Consume<'a, 'b> for Cmd {
                 check!(parser, data, NEWLINE);
                 parser.complete(Self::Write(expr, s))
             }
-            (mut parser, Token::PRINT) => {
+            (mut parser, TokenType::PRINT) => {
                 consume!(parser, data, LiteralString, s);
                 check!(parser, data, NEWLINE);
                 parser.complete(Self::Print(s))
             }
-            (mut parser, Token::FN) => {
+            (mut parser, TokenType::FN) => {
                 consume!(parser, data, Variable, v);
                 check!(parser, data, LPAREN);
                 consume_list!(parser, data, RPAREN, bindings);
@@ -549,14 +558,14 @@ impl<'a, 'b> Consume<'a, 'b> for Cmd {
                 consume_list!(parser, data, RCURLY, NEWLINE, true, statements);
                 parser.complete(Self::Fn(v, bindings, ty, statements))
             }
-            (mut parser, Token::TYPE) => {
+            (mut parser, TokenType::TYPE) => {
                 consume!(parser, data, Variable, v);
                 check!(parser, data, EQUALS);
                 consume!(parser, data, Type, ty);
                 check!(parser, data, NEWLINE);
                 parser.complete(Self::Type(v, ty))
             }
-            (mut parser, Token::STRUCT) => {
+            (mut parser, TokenType::STRUCT) => {
                 consume!(parser, data, Variable, v);
                 check!(parser, data, LCURLY);
                 check!(parser, data, NEWLINE);
@@ -682,20 +691,20 @@ impl<'a, 'b> Consume<'a, 'b> for Statement {
     fn consume(parser: Parser, data: &'b StaticParserData<'a>) -> ParseResult<'a, Self> {
         measure!("statement");
         localize_error!(parser, data, Statement, {
-            match parser.first(data) {
-                Token::ASSERT => {
+            match parser.first_type(data) {
+                TokenType::ASSERT => {
                     parser = parser.skip_one();
                     consume!(parser, data, Expr, expr);
                     check!(parser, data, COMMA);
                     consume!(parser, data, LiteralString, msg);
                     parser.complete(Statement::Assert(expr, msg))
                 }
-                Token::RETURN => {
+                TokenType::RETURN => {
                     parser = parser.skip_one();
                     consume!(parser, data, Expr, expr);
                     parser.complete(Statement::Return(expr))
                 }
-                Token::LET => {
+                TokenType::LET => {
                     parser = parser.skip_one();
                     consume!(parser, data, LValue, lvalue);
                     check!(parser, data, EQUALS);
@@ -708,6 +717,56 @@ impl<'a, 'b> Consume<'a, 'b> for Statement {
                 ),
             }
         })
+    }
+}
+
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy)]
+pub struct Op(TokenType);
+
+impl Op {
+    const fn precedence(self) -> u8 {
+        match self.0 {
+            TokenType::Add | TokenType::Sub => 4,
+            TokenType::Mul | TokenType::Div | TokenType::Mod => 5,
+            TokenType::Less
+            | TokenType::Greater
+            | TokenType::LessEq
+            | TokenType::GreaterEq
+            | TokenType::Eq
+            | TokenType::Neq => 3,
+            TokenType::And | TokenType::Or => 2,
+            TokenType::Not => u8::MAX,
+            _ => unreachable!(),
+        }
+    }
+}
+
+impl From<TokenType> for Op {
+    fn from(token: TokenType) -> Self {
+        Op(token)
+    }
+}
+
+impl CustomDisplay for Op {
+    fn fmt(&self, f: &mut String, _string_map: &[&str]) -> std::fmt::Result {
+        match self.0 {
+            TokenType::Add => f.write_str("+"),
+            TokenType::Sub => f.write_str("-"),
+            TokenType::Mul => f.write_str("*"),
+            TokenType::Div => f.write_str("/"),
+            TokenType::Mod => f.write_str("%"),
+            TokenType::Not => f.write_str("!"),
+            TokenType::Greater => f.write_str(">"),
+            TokenType::Less => f.write_str("<"),
+            TokenType::Eq => f.write_str("=="),
+            TokenType::Neq => f.write_str("!="),
+            TokenType::And => f.write_str("&&"),
+            TokenType::Or => f.write_str("||"),
+            TokenType::GreaterEq => f.write_str(">="),
+            TokenType::LessEq => f.write_str("<="),
+            _ => unreachable!(),
+        }
     }
 }
 
@@ -734,16 +793,6 @@ pub enum Expr {
     SumLoop(Vec<LoopField>, Box<Expr>),
 }
 
-const fn op_precedence(op: Op) -> u8 {
-    match op {
-        Op::Add | Op::Sub => 4,
-        Op::Mul | Op::Div | Op::Mod => 5,
-        Op::Less | Op::Greater | Op::LessEq | Op::GreaterEq | Op::Eq | Op::Neq => 3,
-        Op::And | Op::Or => 2,
-        Op::Not => u8::MAX,
-    }
-}
-
 impl Expr {
     const UNOP_PRECEDENCE: u8 = 6;
 
@@ -751,7 +800,7 @@ impl Expr {
         match self {
             Expr::TupleIndex(_, _) | Expr::ArrayIndex(_, _) => 7,
             Expr::Unop(_, _) => Self::UNOP_PRECEDENCE,
-            Expr::Binop(_, op, _) => op_precedence(*op),
+            Expr::Binop(_, op, _) => op.precedence(),
             Expr::If(_, _, _) | Expr::ArrayLoop(_, _) | Expr::SumLoop(_, _) => 1,
             _ => u8::MAX,
         }
@@ -898,8 +947,9 @@ impl<'a, 'b> Consume<'a, 'b> for Expr {
     #[allow(clippy::too_many_lines)]
     fn consume(parser: Parser, data: &'b StaticParserData<'a>) -> ParseResult<'a, Self> {
         measure!("expr");
-        let (mut parser, mut expr) = match parser.next(data) {
-            (mut parser, Token::OP(op @ (Op::Not | Op::Sub))) => {
+        let next = parser.next(data);
+        let (mut parser, mut expr) = match (next.0, next.1.get_type()) {
+            (mut parser, op @ (TokenType::Not | TokenType::Sub)) => {
                 fn rearrange_according_to_precedence(
                     op: Op,
                     right_expr: Expr,
@@ -922,9 +972,10 @@ impl<'a, 'b> Consume<'a, 'b> for Expr {
                 }
 
                 consume!(parser, data, Expr, expr);
-                (parser, rearrange_according_to_precedence(op, expr))
+                (parser, rearrange_according_to_precedence(op.into(), expr))
             }
-            (parser, Token::INTVAL(si)) => {
+            (parser, TokenType::INTVAL) => {
+                let si = next.1.get_index();
                 let s = data.string_map[si];
                 if let Ok(i) = s.parse::<i64>() {
                     (parser, Expr::Int(i, si))
@@ -932,7 +983,8 @@ impl<'a, 'b> Consume<'a, 'b> for Expr {
                     miss!(parser, "couldn't parse integer {s}")
                 }
             }
-            (parser, Token::FLOATVAL(si)) => {
+            (parser, TokenType::FLOATVAL) => {
+                let si = next.1.get_index();
                 let s = data.string_map[si];
                 if let Ok(f) = s.parse::<f64>() {
                     if !f.is_finite() {
@@ -944,24 +996,24 @@ impl<'a, 'b> Consume<'a, 'b> for Expr {
                     miss!(parser, "couldn't parse float {s}")
                 }
             }
-            (parser, Token::VOID) => (parser, Expr::Void),
-            (parser, Token::TRUE) => (parser, Expr::True),
-            (parser, Token::FALSE) => (parser, Expr::False),
-            (parser, Token::VARIABLE(s)) => (parser, Expr::Variable(Variable(s))),
-            (mut parser, Token::LSQUARE) => {
+            (parser, TokenType::VOID) => (parser, Expr::Void),
+            (parser, TokenType::TRUE) => (parser, Expr::True),
+            (parser, TokenType::FALSE) => (parser, Expr::False),
+            (parser, TokenType::VARIABLE) => (parser, Expr::Variable(Variable(next.1.get_index()))),
+            (mut parser, TokenType::LSQUARE) => {
                 consume_list!(parser, data, RSQUARE, exprs);
                 (parser, Expr::ArrayLiteral(exprs))
             }
-            (mut parser, Token::LPAREN) => {
+            (mut parser, TokenType::LPAREN) => {
                 consume!(parser, data, Expr, expr);
                 check!(parser, data, RPAREN);
                 (parser, Expr::Paren(Box::new(expr)))
             }
-            (mut parser, Token::LCURLY) => {
+            (mut parser, TokenType::LCURLY) => {
                 consume_list!(parser, data, RCURLY, exprs);
                 (parser, Expr::TupleLiteral(exprs))
             }
-            (mut parser, Token::IF) => {
+            (mut parser, TokenType::IF) => {
                 consume!(parser, data, Expr, expr);
                 check!(parser, data, THEN);
                 consume!(parser, data, Expr, expr2);
@@ -969,13 +1021,13 @@ impl<'a, 'b> Consume<'a, 'b> for Expr {
                 consume!(parser, data, Expr, expr3);
                 (parser, Expr::If(Box::new(expr), Box::new(expr2), Box::new(expr3)))
             }
-            (mut parser, Token::ARRAY) => {
+            (mut parser, TokenType::ARRAY) => {
                 check!(parser, data, LSQUARE);
                 consume_list!(parser, data, RSQUARE, fields);
                 consume!(parser, data, Expr, expr);
                 (parser, Expr::ArrayLoop(fields, Box::new(expr)))
             }
-            (mut parser, Token::SUM) => {
+            (mut parser, TokenType::SUM) => {
                 check!(parser, data, LSQUARE);
                 consume_list!(parser, data, RSQUARE, fields);
                 consume!(parser, data, Expr, expr);
@@ -987,34 +1039,52 @@ impl<'a, 'b> Consume<'a, 'b> for Expr {
         };
 
         let (parser, expr) = loop {
-            let (rem_parser, new_expr) = match (parser.next(data), &expr) {
-                ((mut parser, Token::LSQUARE), _) => {
+            let (rem_parser, new_expr) = match (parser.next_type(data), &expr) {
+                ((mut parser, TokenType::LSQUARE), _) => {
                     consume_list!(parser, data, RSQUARE, exprs);
                     (parser, Expr::ArrayIndex(Box::new(expr), exprs))
                 }
-                ((mut parser, Token::LPAREN), Expr::Variable(s)) => {
+                ((mut parser, TokenType::LPAREN), Expr::Variable(s)) => {
                     consume_list!(parser, data, RPAREN, exprs);
                     (parser, Expr::Call(*s, exprs))
                 }
-                ((mut parser, Token::LCURLY), Expr::Variable(s)) => {
+                ((mut parser, TokenType::LCURLY), Expr::Variable(s)) => {
                     consume_list!(parser, data, RCURLY, exprs);
                     (parser, Expr::StructLiteral(*s, exprs))
                 }
-                ((mut parser, Token::LCURLY), _) => {
+                ((mut parser, TokenType::LCURLY), _) => {
                     consume_list!(parser, data, RCURLY, exprs);
                     (parser, Expr::TupleIndex(Box::new(expr), exprs))
                 }
-                ((mut parser, Token::DOT), _) => {
+                ((mut parser, TokenType::DOT), _) => {
                     consume!(parser, data, Variable, var);
                     (parser, Expr::Dot(Box::new(expr), var))
                 }
-                ((mut parser, Token::OP(op)), _) => {
+                (
+                    (
+                        mut parser,
+                        op @ (TokenType::Add
+                        | TokenType::Sub
+                        | TokenType::Mul
+                        | TokenType::Div
+                        | TokenType::Mod
+                        | TokenType::Greater
+                        | TokenType::Less
+                        | TokenType::Eq
+                        | TokenType::Neq
+                        | TokenType::And
+                        | TokenType::Or
+                        | TokenType::GreaterEq
+                        | TokenType::LessEq),
+                    ),
+                    _,
+                ) => {
                     fn rearrange_according_to_precedence(
                         new_expr: Expr,
                         op: Op,
                         right_expr: Expr,
                     ) -> Expr {
-                        if op_precedence(op) < right_expr.precedence() {
+                        if op.precedence() < right_expr.precedence() {
                             Expr::Binop(Box::new(new_expr), op, Box::new(right_expr))
                         } else {
                             match right_expr {
@@ -1033,7 +1103,10 @@ impl<'a, 'b> Consume<'a, 'b> for Expr {
                     }
 
                     consume!(parser, data, Expr, expr2);
-                    (parser, rearrange_according_to_precedence(expr, op, expr2))
+                    (
+                        parser,
+                        rearrange_according_to_precedence(expr, op.into(), expr2),
+                    )
                 }
                 _ => break (parser, expr),
             };
@@ -1079,9 +1152,10 @@ impl CustomDisplay for LValue {
 impl<'a, 'b> Consume<'a, 'b> for LValue {
     fn consume(parser: Parser, data: &'b StaticParserData<'a>) -> ParseResult<'a, Self> {
         measure!("lvalue");
-        let (parser, lv) = match parser.next(data) {
-            (parser, Token::VARIABLE(s)) => (parser, LValue::Var(Variable(s))),
-            (mut parser, Token::LCURLY) => {
+        let next = parser.next(data);
+        let (parser, lv) = match (next.0, next.1.get_type()) {
+            (parser, TokenType::VARIABLE) => (parser, LValue::Var(Variable(next.1.get_index()))),
+            (mut parser, TokenType::LCURLY) => {
                 consume_list!(parser, data, RCURLY, lvs);
                 (parser, LValue::Tuple(lvs))
             }
@@ -1091,8 +1165,8 @@ impl<'a, 'b> Consume<'a, 'b> for LValue {
             ),
         };
 
-        let (parser, lv) = match (parser.next(data), &lv) {
-            ((mut parser, Token::LSQUARE), &LValue::Var(s)) => {
+        let (parser, lv) = match (parser.next_type(data), &lv) {
+            ((mut parser, TokenType::LSQUARE), &LValue::Var(s)) => {
                 consume_list!(parser, data, RSQUARE, args);
                 (parser, LValue::Array(s, args))
             }
@@ -1162,13 +1236,14 @@ impl CustomDisplay for Type {
 impl<'a, 'b> Consume<'a, 'b> for Type {
     fn consume(parser: Parser, data: &'b StaticParserData<'a>) -> ParseResult<'a, Self> {
         measure!("type");
-        let (mut parser, mut ty) = match parser.next(data) {
-            (parser, Token::VARIABLE(s)) => (parser, Type::Struct(s)),
-            (parser, Token::INT) => (parser, Type::Int),
-            (parser, Token::BOOL) => (parser, Type::Bool),
-            (parser, Token::VOID) => (parser, Type::Void),
-            (parser, Token::FLOAT) => (parser, Type::Float),
-            (mut parser, Token::LCURLY) => {
+        let next = parser.next(data);
+        let (mut parser, mut ty) = match (next.0, next.1.get_type()) {
+            (parser, TokenType::VARIABLE) => (parser, Type::Struct(next.1.get_index())),
+            (parser, TokenType::INT) => (parser, Type::Int),
+            (parser, TokenType::BOOL) => (parser, Type::Bool),
+            (parser, TokenType::VOID) => (parser, Type::Void),
+            (parser, TokenType::FLOAT) => (parser, Type::Float),
+            (mut parser, TokenType::LCURLY) => {
                 consume_list!(parser, data, RCURLY, tys);
                 (parser, Type::Tuple(tys))
             }
@@ -1180,19 +1255,19 @@ impl<'a, 'b> Consume<'a, 'b> for Type {
 
         #[allow(clippy::while_let_loop)]
         loop {
-            match (parser.first(data), &ty) {
-                (Token::LSQUARE, _) => {
+            match (parser.first_type(data), &ty) {
+                (TokenType::LSQUARE, _) => {
                     parser = parser.skip_one();
 
                     let mut depth: u8 = 1;
 
                     loop {
-                        match parser.next(data) {
-                            (advanced_parser, Token::RSQUARE) => {
+                        match parser.next_type(data) {
+                            (advanced_parser, TokenType::RSQUARE) => {
                                 parser = advanced_parser;
                                 break;
                             }
-                            (advanced_parser, Token::COMMA) => {
+                            (advanced_parser, TokenType::COMMA) => {
                                 parser = advanced_parser;
                                 depth += 1;
                             }
@@ -1280,12 +1355,12 @@ pub fn parse<'a>(
                 cmds.push(cmd);
             }
             pr => {
-                if let Token::NEWLINE = parser.first(data) {
+                if let TokenType::NEWLINE = parser.first_type(data) {
                     parser = parser.skip_one();
                     continue;
                 }
 
-                if let Token::END_OF_FILE = parser.first(data) {
+                if let TokenType::END_OF_FILE = parser.first_type(data) {
                     break;
                 }
 

@@ -6,8 +6,33 @@ use crate::{measure, CustomDisplay};
 #[cfg(test)]
 use crate::{test_correct, test_solos};
 
-#[derive(Debug, Clone, PartialEq, Eq, Copy)]
-pub enum Op {
+#[repr(usize)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[allow(non_camel_case_types, clippy::upper_case_acronyms)]
+pub enum TokenType {
+    ARRAY,
+    ASSERT,
+    BOOL,
+    COLON,
+    COMMA,
+    DOT,
+    ELSE,
+    END_OF_FILE,
+    EQUALS,
+    FALSE,
+    FLOAT,
+    FLOATVAL,
+    FN,
+    IF,
+    IMAGE,
+    INT,
+    INTVAL,
+    LCURLY,
+    LET,
+    LPAREN,
+    LSQUARE,
+    NEWLINE,
+    // Inlined Ops
     Add,
     Sub,
     Mul,
@@ -22,55 +47,7 @@ pub enum Op {
     Or,
     GreaterEq,
     LessEq,
-}
-
-impl CustomDisplay for Op {
-    fn fmt(&self, f: &mut String, _string_map: &[&str]) -> std::fmt::Result {
-        match self {
-            Op::Add => f.write_char('+'),
-            Op::Sub => f.write_char('-'),
-            Op::Mul => f.write_char('*'),
-            Op::Div => f.write_char('/'),
-            Op::Mod => f.write_char('%'),
-            Op::Not => f.write_char('!'),
-            Op::Greater => f.write_char('>'),
-            Op::Less => f.write_char('<'),
-            Op::Eq => f.write_str("=="),
-            Op::Neq => f.write_str("!="),
-            Op::And => f.write_str("&&"),
-            Op::Or => f.write_str("||"),
-            Op::GreaterEq => f.write_str(">="),
-            Op::LessEq => f.write_str("<="),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[allow(non_camel_case_types, clippy::upper_case_acronyms)]
-pub enum Token {
-    ARRAY,
-    ASSERT,
-    BOOL,
-    COLON,
-    COMMA,
-    DOT,
-    ELSE,
-    END_OF_FILE,
-    EQUALS,
-    FALSE,
-    FLOAT,
-    FLOATVAL(usize),
-    FN,
-    IF,
-    IMAGE,
-    INT,
-    INTVAL(usize),
-    LCURLY,
-    LET,
-    LPAREN,
-    LSQUARE,
-    NEWLINE,
-    OP(Op),
+    //
     PRINT,
     RCURLY,
     READ,
@@ -78,83 +55,180 @@ pub enum Token {
     RPAREN,
     RSQUARE,
     SHOW,
-    STRING(usize),
+    STRING,
     STRUCT,
     SUM,
     THEN,
     TIME,
     TO,
     TRUE,
-    VARIABLE(usize),
+    VARIABLE,
     VOID,
     WRITE,
     TYPE,
 }
 
+#[derive(Clone, Copy)]
+pub union Token {
+    token: TokenType,
+    index: usize,
+}
+
+impl Token {
+    const SAFEBITS: u32 = 6;
+    const DELETE_INDEX_SHIFT: u32 = usize::BITS - Self::SAFEBITS;
+
+    fn new(token: TokenType) -> Self {
+        Token { token }
+    }
+
+    #[must_use]
+    pub const fn get_type(&self) -> TokenType {
+        unsafe {
+            std::mem::transmute::<usize, TokenType>(
+                self.index << Self::DELETE_INDEX_SHIFT >> Self::DELETE_INDEX_SHIFT,
+            )
+        }
+    }
+
+    #[must_use]
+    #[allow(clippy::missing_panics_doc)]
+    pub fn get_index(&self) -> usize {
+        #[cfg(debug_assertions)]
+        {
+            match self.get_type() {
+                TokenType::VARIABLE
+                | TokenType::STRING
+                | TokenType::FLOATVAL
+                | TokenType::INTVAL => {}
+                t => panic!("Cannot access index of enum with type {t:?}"),
+            }
+        }
+
+        // less than 64 variants so we just drop those :)
+        unsafe { self.index >> Self::SAFEBITS }
+    }
+
+    #[allow(clippy::missing_panics_doc)]
+    fn set_index(mut self, index: usize) -> Self {
+        #[cfg(debug_assertions)]
+        {
+            match self.get_type() {
+                TokenType::VARIABLE
+                | TokenType::STRING
+                | TokenType::FLOATVAL
+                | TokenType::INTVAL => {}
+                t => panic!("Cannot set index of enum with {t:?}"),
+            }
+        }
+
+        let ty = unsafe { self.index } << Self::DELETE_INDEX_SHIFT >> Self::DELETE_INDEX_SHIFT;
+
+        self.index = index
+            .checked_shl(Self::SAFEBITS)
+            .expect("You're compiling too big a file, please don't :)");
+
+        // Restore discriminant
+        unsafe {
+            self.index |= ty;
+        }
+
+        self
+    }
+}
+
+impl From<TokenType> for Token {
+    fn from(token: TokenType) -> Self {
+        Token { token }
+    }
+}
+
+impl std::fmt::Debug for Token {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self.get_type())
+    }
+}
+
+impl PartialEq for Token {
+    fn eq(&self, other: &Self) -> bool {
+        // This compares both at once.
+        unsafe { self.index == other.index }
+    }
+}
+
 impl CustomDisplay for Token {
     fn fmt(&self, f: &mut String, string_map: &[&str]) -> std::fmt::Result {
-        match self {
-            Token::ARRAY => f.write_str("ARRAY 'array'"),
-            Token::ASSERT => f.write_str("ASSERT 'assert'"),
-            Token::BOOL => f.write_str("BOOL 'bool'"),
-            Token::COLON => f.write_str("COLON ':'"),
-            Token::COMMA => f.write_str("COMMA ','"),
-            Token::DOT => f.write_str("DOT '.'"),
-            Token::ELSE => f.write_str("ELSE 'else'"),
-            Token::END_OF_FILE => f.write_str("END_OF_FILE"),
-            Token::EQUALS => f.write_str("EQUALS '='"),
-            Token::FALSE => f.write_str("FALSE 'false'"),
-            Token::FLOAT => f.write_str("FLOAT 'float'"),
-            Token::FN => f.write_str("FN 'fn'"),
-            Token::IF => f.write_str("IF 'if'"),
-            Token::IMAGE => f.write_str("IMAGE 'image'"),
-            Token::INT => f.write_str("INT 'int'"),
-            Token::LCURLY => f.write_str("LCURLY '{'"),
-            Token::LET => f.write_str("LET 'let'"),
-            Token::LPAREN => f.write_str("LPAREN '('"),
-            Token::LSQUARE => f.write_str("LSQUARE '['"),
-            Token::NEWLINE => f.write_str("NEWLINE"),
-            Token::OP(op) => {
-                f.write_str("OP '")?;
-                op.fmt(f, string_map)?;
-                f.write_char('\'')
-            }
-            Token::PRINT => f.write_str("PRINT 'print'"),
-            Token::RCURLY => f.write_str("RCURLY '}'"),
-            Token::READ => f.write_str("READ 'read'"),
-            Token::RETURN => f.write_str("RETURN 'return'"),
-            Token::RPAREN => f.write_str("RPAREN ')'"),
-            Token::RSQUARE => f.write_str("RSQUARE ']'"),
-            Token::SHOW => f.write_str("SHOW 'show'"),
-            Token::STRUCT => f.write_str("STRUCT 'struct'"),
-            Token::SUM => f.write_str("SUM 'sum'"),
-            Token::THEN => f.write_str("THEN 'then'"),
-            Token::TIME => f.write_str("TIME 'time'"),
-            Token::TO => f.write_str("TO 'to'"),
-            Token::TRUE => f.write_str("TRUE 'true'"),
-            Token::VOID => f.write_str("VOID 'void'"),
-            Token::WRITE => f.write_str("WRITE 'write'"),
-            Token::TYPE => f.write_str("TYPE 'type'"),
-            Token::VARIABLE(s) => {
+        match self.get_type() {
+            TokenType::ARRAY => f.write_str("ARRAY 'array'"),
+            TokenType::ASSERT => f.write_str("ASSERT 'assert'"),
+            TokenType::BOOL => f.write_str("BOOL 'bool'"),
+            TokenType::COLON => f.write_str("COLON ':'"),
+            TokenType::COMMA => f.write_str("COMMA ','"),
+            TokenType::DOT => f.write_str("DOT '.'"),
+            TokenType::ELSE => f.write_str("ELSE 'else'"),
+            TokenType::END_OF_FILE => f.write_str("END_OF_FILE"),
+            TokenType::EQUALS => f.write_str("EQUALS '='"),
+            TokenType::FALSE => f.write_str("FALSE 'false'"),
+            TokenType::FLOAT => f.write_str("FLOAT 'float'"),
+            TokenType::FN => f.write_str("FN 'fn'"),
+            TokenType::IF => f.write_str("IF 'if'"),
+            TokenType::IMAGE => f.write_str("IMAGE 'image'"),
+            TokenType::INT => f.write_str("INT 'int'"),
+            TokenType::LCURLY => f.write_str("LCURLY '{'"),
+            TokenType::LET => f.write_str("LET 'let'"),
+            TokenType::LPAREN => f.write_str("LPAREN '('"),
+            TokenType::LSQUARE => f.write_str("LSQUARE '['"),
+            TokenType::NEWLINE => f.write_str("NEWLINE"),
+            TokenType::PRINT => f.write_str("PRINT 'print'"),
+            TokenType::RCURLY => f.write_str("RCURLY '}'"),
+            TokenType::READ => f.write_str("READ 'read'"),
+            TokenType::RETURN => f.write_str("RETURN 'return'"),
+            TokenType::RPAREN => f.write_str("RPAREN ')'"),
+            TokenType::RSQUARE => f.write_str("RSQUARE ']'"),
+            TokenType::SHOW => f.write_str("SHOW 'show'"),
+            TokenType::STRUCT => f.write_str("STRUCT 'struct'"),
+            TokenType::SUM => f.write_str("SUM 'sum'"),
+            TokenType::THEN => f.write_str("THEN 'then'"),
+            TokenType::TIME => f.write_str("TIME 'time'"),
+            TokenType::TO => f.write_str("TO 'to'"),
+            TokenType::TRUE => f.write_str("TRUE 'true'"),
+            TokenType::VOID => f.write_str("VOID 'void'"),
+            TokenType::WRITE => f.write_str("WRITE 'write'"),
+            TokenType::TYPE => f.write_str("TYPE 'type'"),
+            TokenType::VARIABLE => {
                 f.write_str("VARIABLE '")?;
-                f.write_str(string_map[*s])?;
+                f.write_str(string_map[self.get_index()])?;
                 f.write_char('\'')
             }
-            Token::STRING(s) => {
+            TokenType::STRING => {
                 f.write_str("STRING '\"")?;
-                f.write_str(string_map[*s])?;
+                f.write_str(string_map[self.get_index()])?;
                 f.write_str("\"'")
             }
-            Token::FLOATVAL(s) => {
+            TokenType::FLOATVAL => {
                 f.write_str("FLOATVAL '")?;
-                f.write_str(string_map[*s])?;
+                f.write_str(string_map[self.get_index()])?;
                 f.write_char('\'')
             }
-            Token::INTVAL(s) => {
+            TokenType::INTVAL => {
                 f.write_str("INTVAL '")?;
-                f.write_str(string_map[*s])?;
+                f.write_str(string_map[self.get_index()])?;
                 f.write_char('\'')
             }
+            TokenType::Add => f.write_str("OP '+'"),
+            TokenType::Sub => f.write_str("OP '-'"),
+            TokenType::Mul => f.write_str("OP '*'"),
+            TokenType::Div => f.write_str("OP '/'"),
+            TokenType::Mod => f.write_str("OP '%'"),
+            TokenType::Not => f.write_str("OP '!'"),
+            TokenType::Greater => f.write_str("OP '>'"),
+            TokenType::Less => f.write_str("OP '<'"),
+            TokenType::Eq => f.write_str("OP '=='"),
+            TokenType::Neq => f.write_str("OP '!='"),
+            TokenType::And => f.write_str("OP '&&'"),
+            TokenType::Or => f.write_str("OP '||'"),
+            TokenType::GreaterEq => f.write_str("OP '>='"),
+            TokenType::LessEq => f.write_str("OP '<='"),
         }
     }
 }
@@ -165,7 +239,7 @@ impl CustomDisplay for Token {
 #[allow(clippy::range_plus_one)]
 pub fn lex(str_input: &str) -> Result<(Vec<Token>, Vec<&str>, Vec<&str>)> {
     measure!("lex");
-    let mut acc = vec![];
+    let mut tokens: Vec<Token> = vec![];
     let mut input_by_token = vec![];
     let mut string_map: Vec<&str> = vec![];
 
@@ -181,7 +255,7 @@ pub fn lex(str_input: &str) -> Result<(Vec<Token>, Vec<&str>, Vec<&str>)> {
             last_loop_index = index;
         }
         match input.get(index) {
-            None => break acc.push(Token::END_OF_FILE),
+            None => break tokens.push(TokenType::END_OF_FILE.into()),
             Some(b' ') => index += 1,
             Some(b'\\') => {
                 if let Some(b'\n') = input.get(index + 1) {
@@ -226,15 +300,15 @@ pub fn lex(str_input: &str) -> Result<(Vec<Token>, Vec<&str>, Vec<&str>)> {
                     // include the newline
                     current_index += 1;
 
-                    if acc.last() != Some(&Token::NEWLINE) {
-                        acc.push(Token::NEWLINE);
+                    if tokens.last().map(Token::get_type) != Some(TokenType::NEWLINE) {
+                        tokens.push(TokenType::NEWLINE.into());
                         input_by_token.push(&str_input[index..current_index]);
                     }
 
                     index = current_index;
                 }
                 _ => {
-                    acc.push(Token::OP(Op::Div));
+                    tokens.push(TokenType::Div.into());
                     input_by_token.push(&str_input[index..index + 1]);
                     index += 1;
                 }
@@ -265,9 +339,9 @@ pub fn lex(str_input: &str) -> Result<(Vec<Token>, Vec<&str>, Vec<&str>)> {
                 let next_index = string_map.len() - 1;
 
                 if is_float {
-                    acc.push(Token::FLOATVAL(next_index));
+                    tokens.push(Token::new(TokenType::FLOATVAL).set_index(next_index));
                 } else {
-                    acc.push(Token::INTVAL(next_index));
+                    tokens.push(Token::new(TokenType::INTVAL).set_index(next_index));
                 }
 
                 input_by_token.push(s);
@@ -294,12 +368,12 @@ pub fn lex(str_input: &str) -> Result<(Vec<Token>, Vec<&str>, Vec<&str>)> {
                     string_map.push(s);
                     let next_index = string_map.len() - 1;
 
-                    acc.push(Token::FLOATVAL(next_index));
+                    tokens.push(Token::new(TokenType::FLOATVAL).set_index(next_index));
                     input_by_token.push(s);
 
                     index = current_index;
                 } else {
-                    acc.push(Token::DOT);
+                    tokens.push(TokenType::DOT.into());
                     input_by_token.push(&str_input[index..index + 1]);
                     index += 1;
                 }
@@ -316,10 +390,12 @@ pub fn lex(str_input: &str) -> Result<(Vec<Token>, Vec<&str>, Vec<&str>)> {
                     }
                 }
 
-                string_map.push(&str_input[index + 1..current_index]);
+                let s = &str_input[index + 1..current_index];
+
+                string_map.push(s);
                 let next_index = string_map.len() - 1;
 
-                acc.push(Token::STRING(next_index));
+                tokens.push(Token::new(TokenType::STRING).set_index(next_index));
                 input_by_token.push(&str_input[index..current_index + 1]); // Keep the " in the capture
                 index = current_index + 1; // skip the closing "
             }
@@ -338,44 +414,44 @@ pub fn lex(str_input: &str) -> Result<(Vec<Token>, Vec<&str>, Vec<&str>)> {
                 let s = &str_input[index..current_index];
 
                 let token = match s {
-                    "array" => Token::ARRAY,
-                    "assert" => Token::ASSERT,
-                    "bool" => Token::BOOL,
-                    "else" => Token::ELSE,
-                    "false" => Token::FALSE,
-                    "float" => Token::FLOAT,
-                    "fn" => Token::FN,
-                    "if" => Token::IF,
-                    "image" => Token::IMAGE,
-                    "int" => Token::INT,
-                    "let" => Token::LET,
-                    "print" => Token::PRINT,
-                    "read" => Token::READ,
-                    "return" => Token::RETURN,
-                    "show" => Token::SHOW,
-                    "struct" => Token::STRUCT,
-                    "sum" => Token::SUM,
-                    "then" => Token::THEN,
-                    "time" => Token::TIME,
-                    "to" => Token::TO,
-                    "true" => Token::TRUE,
-                    "void" => Token::VOID,
-                    "write" => Token::WRITE,
-                    "type" => Token::TYPE,
+                    "array" => TokenType::ARRAY.into(),
+                    "assert" => TokenType::ASSERT.into(),
+                    "bool" => TokenType::BOOL.into(),
+                    "else" => TokenType::ELSE.into(),
+                    "false" => TokenType::FALSE.into(),
+                    "float" => TokenType::FLOAT.into(),
+                    "fn" => TokenType::FN.into(),
+                    "if" => TokenType::IF.into(),
+                    "image" => TokenType::IMAGE.into(),
+                    "int" => TokenType::INT.into(),
+                    "let" => TokenType::LET.into(),
+                    "print" => TokenType::PRINT.into(),
+                    "read" => TokenType::READ.into(),
+                    "return" => TokenType::RETURN.into(),
+                    "show" => TokenType::SHOW.into(),
+                    "struct" => TokenType::STRUCT.into(),
+                    "sum" => TokenType::SUM.into(),
+                    "then" => TokenType::THEN.into(),
+                    "time" => TokenType::TIME.into(),
+                    "to" => TokenType::TO.into(),
+                    "true" => TokenType::TRUE.into(),
+                    "void" => TokenType::VOID.into(),
+                    "write" => TokenType::WRITE.into(),
+                    "type" => TokenType::TYPE.into(),
                     s => {
                         string_map.push(s);
                         let next_index = string_map.len() - 1;
-                        Token::VARIABLE(next_index)
+                        Token::new(TokenType::VARIABLE).set_index(next_index)
                     }
                 };
 
-                acc.push(token);
+                tokens.push(token);
                 input_by_token.push(s);
                 index = current_index;
             }
             Some(b'\n') => {
-                if acc.last() != Some(&Token::NEWLINE) {
-                    acc.push(Token::NEWLINE);
+                if tokens.last().map(Token::get_type) != Some(TokenType::NEWLINE) {
+                    tokens.push(TokenType::NEWLINE.into());
                     input_by_token.push(&str_input[index..index + 1]);
                 }
                 index += 1;
@@ -383,7 +459,7 @@ pub fn lex(str_input: &str) -> Result<(Vec<Token>, Vec<&str>, Vec<&str>)> {
 
             Some(b'&') => {
                 if let Some(b'&') = input.get(index + 1) {
-                    acc.push(Token::OP(Op::And));
+                    tokens.push(TokenType::And.into());
                     input_by_token.push(&str_input[index..index + 2]);
                     index += 2;
                 } else {
@@ -392,7 +468,7 @@ pub fn lex(str_input: &str) -> Result<(Vec<Token>, Vec<&str>, Vec<&str>)> {
             }
             Some(b'|') => {
                 if let Some(b'|') = input.get(index + 1) {
-                    acc.push(Token::OP(Op::Or));
+                    tokens.push(TokenType::Or.into());
                     input_by_token.push(&str_input[index..index + 2]);
                     index += 2;
                 } else {
@@ -401,105 +477,105 @@ pub fn lex(str_input: &str) -> Result<(Vec<Token>, Vec<&str>, Vec<&str>)> {
             }
             Some(b'=') => {
                 if let Some(b'=') = input.get(index + 1) {
-                    acc.push(Token::OP(Op::Eq));
+                    tokens.push(TokenType::Eq.into());
                     input_by_token.push(&str_input[index..index + 2]);
                     index += 2;
                 } else {
-                    acc.push(Token::EQUALS);
+                    tokens.push(TokenType::EQUALS.into());
                     input_by_token.push(&str_input[index..index + 1]);
                     index += 1;
                 }
             }
             Some(b'>') => {
                 if let Some(b'=') = input.get(index + 1) {
-                    acc.push(Token::OP(Op::GreaterEq));
+                    tokens.push(TokenType::GreaterEq.into());
                     input_by_token.push(&str_input[index..index + 2]);
                     index += 2;
                 } else {
-                    acc.push(Token::OP(Op::Greater));
+                    tokens.push(TokenType::Greater.into());
                     input_by_token.push(&str_input[index..index + 1]);
                     index += 1;
                 }
             }
             Some(b'<') => {
                 if let Some(b'=') = input.get(index + 1) {
-                    acc.push(Token::OP(Op::LessEq));
+                    tokens.push(TokenType::LessEq.into());
                     input_by_token.push(&str_input[index..index + 2]);
                     index += 2;
                 } else {
-                    acc.push(Token::OP(Op::Less));
+                    tokens.push(TokenType::Less.into());
                     input_by_token.push(&str_input[index..index + 1]);
                     index += 1;
                 }
             }
             Some(b'+') => {
-                acc.push(Token::OP(Op::Add));
+                tokens.push(TokenType::Add.into());
                 input_by_token.push(&str_input[index..index + 1]);
                 index += 1;
             }
             Some(b'-') => {
-                acc.push(Token::OP(Op::Sub));
+                tokens.push(TokenType::Sub.into());
                 input_by_token.push(&str_input[index..index + 1]);
                 index += 1;
             }
             Some(b'*') => {
-                acc.push(Token::OP(Op::Mul));
+                tokens.push(TokenType::Mul.into());
                 input_by_token.push(&str_input[index..index + 1]);
                 index += 1;
             }
             Some(b'%') => {
-                acc.push(Token::OP(Op::Mod));
+                tokens.push(TokenType::Mod.into());
                 input_by_token.push(&str_input[index..index + 1]);
                 index += 1;
             }
             Some(b'!') => {
                 if let Some(b'=') = input.get(index + 1) {
-                    acc.push(Token::OP(Op::Neq));
+                    tokens.push(TokenType::Neq.into());
                     input_by_token.push(&str_input[index..index + 2]);
                     index += 2;
                 } else {
-                    acc.push(Token::OP(Op::Not));
+                    tokens.push(TokenType::Not.into());
                     input_by_token.push(&str_input[index..index + 1]);
                     index += 1;
                 }
             }
             Some(b'{') => {
-                acc.push(Token::LCURLY);
+                tokens.push(TokenType::LCURLY.into());
                 input_by_token.push(&str_input[index..index + 1]);
                 index += 1;
             }
             Some(b'}') => {
-                acc.push(Token::RCURLY);
+                tokens.push(TokenType::RCURLY.into());
                 input_by_token.push(&str_input[index..index + 1]);
                 index += 1;
             }
             Some(b'(') => {
-                acc.push(Token::LPAREN);
+                tokens.push(TokenType::LPAREN.into());
                 input_by_token.push(&str_input[index..index + 1]);
                 index += 1;
             }
             Some(b')') => {
-                acc.push(Token::RPAREN);
+                tokens.push(TokenType::RPAREN.into());
                 input_by_token.push(&str_input[index..index + 1]);
                 index += 1;
             }
             Some(b'[') => {
-                acc.push(Token::LSQUARE);
+                tokens.push(TokenType::LSQUARE.into());
                 input_by_token.push(&str_input[index..index + 1]);
                 index += 1;
             }
             Some(b']') => {
-                acc.push(Token::RSQUARE);
+                tokens.push(TokenType::RSQUARE.into());
                 input_by_token.push(&str_input[index..index + 1]);
                 index += 1;
             }
             Some(b':') => {
-                acc.push(Token::COLON);
+                tokens.push(TokenType::COLON.into());
                 input_by_token.push(&str_input[index..index + 1]);
                 index += 1;
             }
             Some(b',') => {
-                acc.push(Token::COMMA);
+                tokens.push(TokenType::COMMA.into());
                 input_by_token.push(&str_input[index..index + 1]);
                 index += 1;
             }
@@ -515,7 +591,7 @@ pub fn lex(str_input: &str) -> Result<(Vec<Token>, Vec<&str>, Vec<&str>)> {
         }
     }
 
-    Ok((acc, input_by_token, string_map))
+    Ok((tokens, input_by_token, string_map))
 }
 
 #[test]
