@@ -11,9 +11,21 @@ measure-t-p:
 measure-t-p-long:
     cargo run -rq -F measure -- -qp --measure-repeat --measure-repeat t.jpl
 
+bench-t-l:
+    just cr
+    hyperfine 'target/release/rjplc -l t.jpl > /dev/null' --warmup 25
+    
 bench-t-p:
     just cr
     hyperfine 'target/release/rjplc -p t.jpl > /dev/null' --warmup 25
+
+bench-t-l-q:
+    just cr
+    hyperfine 'target/release/rjplc -lq t.jpl' --warmup 25
+    
+bench-t-p-q:
+    just cr
+    hyperfine 'target/release/rjplc -pq t.jpl' --warmup 25
 
 cr: cargo-build-release
 cargo-build-release:
