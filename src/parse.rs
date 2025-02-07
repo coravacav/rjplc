@@ -960,11 +960,12 @@ impl<'a, 'b> Consume<'a, 'b> for Expr {
                         Expr::Unop(op, Box::new(right_expr))
                     } else {
                         match right_expr {
-                            Expr::Binop(right_expr_left, c2, right_expr_right) => Expr::Binop(
-                                Box::new(rearrange_according_to_precedence(
-                                    op,
-                                    *right_expr_left,
-                                )),
+                            Expr::Binop(mut right_expr_left, c2, right_expr_right) => Expr::Binop(
+                                {
+                                    // reuxe the allocation from right_expr_left 
+                                    *right_expr_left = rearrange_according_to_precedence(op,*right_expr_left);
+                                    right_expr_left
+                                },
                                 c2,
                                 right_expr_right,
                             ),
@@ -1091,15 +1092,21 @@ impl<'a, 'b> Consume<'a, 'b> for Expr {
                             Expr::Binop(Box::new(new_expr), op, Box::new(right_expr))
                         } else {
                             match right_expr {
-                                Expr::Binop(right_expr_left, c2, right_expr_right) => Expr::Binop(
-                                    Box::new(rearrange_according_to_precedence(
-                                        new_expr,
-                                        op,
-                                        *right_expr_left,
-                                    )),
-                                    c2,
-                                    right_expr_right,
-                                ),
+                                Expr::Binop(mut right_expr_left, c2, right_expr_right) => {
+                                    Expr::Binop(
+                                        {
+                                            // reuxe the allocation from right_expr_left
+                                            *right_expr_left = rearrange_according_to_precedence(
+                                                new_expr,
+                                                op,
+                                                *right_expr_left,
+                                            );
+                                            right_expr_left
+                                        },
+                                        c2,
+                                        right_expr_right,
+                                    )
+                                }
                                 _ => Expr::Binop(Box::new(new_expr), op, Box::new(right_expr)),
                             }
                         }
@@ -1340,7 +1347,6 @@ pub fn parse<'a>(
         source,
     };
 
-    // let data = unsafe { &*std::ptr::from_ref::<StaticParserData<'a>>(&data) };
     let data = &data;
 
     while !parser.is_empty(data) {

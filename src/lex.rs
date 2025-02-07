@@ -577,9 +577,7 @@ pub fn input_by_token(str_input: &str, capacity: usize) -> Vec<&str> {
         match input.get(index) {
             None => break,
             Some(b' ') => index += 1,
-            Some(b'\\') => {
-                index += 2;
-            }
+            Some(b'\\') => index += 2,
             Some(b'/') => match input.get(index + 1) {
                 Some(b'*') => {
                     let mut current_index = index + 2;
