@@ -5,7 +5,7 @@ use colored::Colorize;
 use itertools::Itertools;
 
 use crate::{
-    lex::{Token, TokenType},
+    lex::{self, Token, TokenType},
     measure, undo_slice_by_cuts, CustomDisplay, UndoSliceSelection,
 };
 
@@ -227,7 +227,6 @@ struct Parser {
 struct StaticParserData<'a> {
     original_tokens: &'a [Token],
     string_map: &'a [&'a str],
-    input_by_token: &'a [&'a str],
     source: &'a str,
 }
 
@@ -294,8 +293,10 @@ impl<'a, 'b> Parser {
     fn print_error(&self, data: &'b StaticParserData<'a>, error_position: usize) -> (usize, usize) {
         let current_position = self.current_position;
 
-        let error_position = if error_position == data.input_by_token.len() {
-            data.input_by_token.len() - 1
+        let input_by_token = lex::input_by_token(data.source, data.original_tokens.len());
+
+        let error_position = if error_position == input_by_token.len() {
+            input_by_token.len() - 1
         } else {
             error_position
         };
@@ -304,9 +305,9 @@ impl<'a, 'b> Parser {
             data.source,
             [
                 UndoSliceSelection::Boundless,
-                UndoSliceSelection::Beginning(data.input_by_token[current_position]),
-                UndoSliceSelection::Beginning(data.input_by_token[error_position]),
-                UndoSliceSelection::End(data.input_by_token[error_position]),
+                UndoSliceSelection::Beginning(input_by_token[current_position]),
+                UndoSliceSelection::Beginning(input_by_token[error_position]),
+                UndoSliceSelection::End(input_by_token[error_position]),
                 UndoSliceSelection::Boundless,
             ],
         );
@@ -332,7 +333,7 @@ impl<'a, 'b> Parser {
             let mut column = 0;
 
             let start_ptr = data.source.as_ptr() as usize;
-            let stop_ptr = data.input_by_token[error_position].as_ptr() as usize;
+            let stop_ptr = input_by_token[error_position].as_ptr() as usize;
 
             for (i, c) in data.source.chars().enumerate() {
                 if start_ptr + i == stop_ptr {
@@ -1322,7 +1323,6 @@ impl<'a, 'b> Consume<'a, 'b> for Binding {
 /// Something
 pub fn parse<'a>(
     tokens: &'a [Token],
-    input_by_token: &'a [&'a str],
     string_map: &'a [&'a str],
     source: &'a str,
     path: &'a Path,
@@ -1336,7 +1336,6 @@ pub fn parse<'a>(
 
     let data = StaticParserData {
         original_tokens: tokens,
-        input_by_token,
         string_map,
         source,
     };
@@ -1399,10 +1398,9 @@ fn test_parse_correct() {
     let regex = Regex::new(r"\n\s+").unwrap();
 
     let tester = |file: &str, solution_file: &str| {
-        let (tokens, input_by_token, string_map) =
-            crate::lex::lex(file).expect("Lexing should work");
+        let (tokens, string_map) = crate::lex::lex(file).expect("Lexing should work");
 
-        let parsed = match parse(&tokens, &input_by_token, &string_map, file, Path::new("")) {
+        let parsed = match parse(&tokens, &string_map, file, Path::new("")) {
             Ok(parsed) => parsed,
             Err(e) => {
                 panic!("Compilation failed {e}");
@@ -1437,11 +1435,11 @@ fn test_parse_correct() {
 #[test]
 fn test_parse_fails() {
     let tester = |file: &str, file_path: &Path| {
-        let Ok((tokens, input_by_tokens, string_map)) = crate::lex::lex(file) else {
+        let Ok((tokens, string_map)) = crate::lex::lex(file) else {
             return;
         };
 
-        match parse(&tokens, &input_by_tokens, &string_map, file, file_path) {
+        match parse(&tokens, &string_map, file, file_path) {
             Ok(parsed) => {
                 println!("{parsed:?}");
                 panic!("expected parse to fail");

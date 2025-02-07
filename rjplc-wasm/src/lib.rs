@@ -46,7 +46,7 @@ pub fn perform_steps(contents: &str) -> Output {
         type_check_success: false,
     };
 
-    let (tokens, input_by_token, string_map) = match lex::lex(contents) {
+    let (tokens, string_map) = match lex::lex(contents) {
         Ok(tokens) => tokens,
         Err(e) => {
             successful_steps.lex_output = Some(format!("{e}"));
@@ -68,13 +68,7 @@ pub fn perform_steps(contents: &str) -> Output {
 
     successful_steps.lex_output = Some(output);
 
-    let parsed = match parse::parse(
-        &tokens,
-        &input_by_token,
-        &string_map,
-        contents,
-        Path::new("textarea"),
-    ) {
+    let parsed = match parse::parse(&tokens, &string_map, contents, Path::new("textarea")) {
         Ok(parsed) => parsed,
         Err(e) => {
             successful_steps.parse_output = Some(format!("{e}"));

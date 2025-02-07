@@ -237,10 +237,9 @@ impl CustomDisplay for Token {
 /// Failed to lex.
 #[allow(clippy::too_many_lines)]
 #[allow(clippy::range_plus_one)]
-pub fn lex(str_input: &str) -> Result<(Vec<Token>, Vec<&str>, Vec<&str>)> {
+pub fn lex(str_input: &str) -> Result<(Vec<Token>, Vec<&str>)> {
     measure!("lex");
     let mut tokens: Vec<Token> = vec![];
-    let mut input_by_token = vec![];
     let mut string_map: Vec<&str> = vec![];
 
     let input = str_input.as_bytes();
@@ -302,14 +301,12 @@ pub fn lex(str_input: &str) -> Result<(Vec<Token>, Vec<&str>, Vec<&str>)> {
 
                     if tokens.last().map(Token::get_type) != Some(TokenType::NEWLINE) {
                         tokens.push(TokenType::NEWLINE.into());
-                        input_by_token.push(&str_input[index..current_index]);
                     }
 
                     index = current_index;
                 }
                 _ => {
                     tokens.push(TokenType::Div.into());
-                    input_by_token.push(&str_input[index..index + 1]);
                     index += 1;
                 }
             },
@@ -344,8 +341,6 @@ pub fn lex(str_input: &str) -> Result<(Vec<Token>, Vec<&str>, Vec<&str>)> {
                     tokens.push(Token::new(TokenType::INTVAL).set_index(next_index));
                 }
 
-                input_by_token.push(s);
-
                 index = current_index;
             }
             Some(b'.') => {
@@ -369,12 +364,10 @@ pub fn lex(str_input: &str) -> Result<(Vec<Token>, Vec<&str>, Vec<&str>)> {
                     let next_index = string_map.len() - 1;
 
                     tokens.push(Token::new(TokenType::FLOATVAL).set_index(next_index));
-                    input_by_token.push(s);
 
                     index = current_index;
                 } else {
                     tokens.push(TokenType::DOT.into());
-                    input_by_token.push(&str_input[index..index + 1]);
                     index += 1;
                 }
             }
@@ -396,7 +389,6 @@ pub fn lex(str_input: &str) -> Result<(Vec<Token>, Vec<&str>, Vec<&str>)> {
                 let next_index = string_map.len() - 1;
 
                 tokens.push(Token::new(TokenType::STRING).set_index(next_index));
-                input_by_token.push(&str_input[index..current_index + 1]); // Keep the " in the capture
                 index = current_index + 1; // skip the closing "
             }
             Some(b'a'..=b'z' | b'A'..=b'Z') => {
@@ -446,13 +438,11 @@ pub fn lex(str_input: &str) -> Result<(Vec<Token>, Vec<&str>, Vec<&str>)> {
                 };
 
                 tokens.push(token);
-                input_by_token.push(s);
                 index = current_index;
             }
             Some(b'\n') => {
                 if tokens.last().map(Token::get_type) != Some(TokenType::NEWLINE) {
                     tokens.push(TokenType::NEWLINE.into());
-                    input_by_token.push(&str_input[index..index + 1]);
                 }
                 index += 1;
             }
@@ -460,7 +450,6 @@ pub fn lex(str_input: &str) -> Result<(Vec<Token>, Vec<&str>, Vec<&str>)> {
             Some(b'&') => {
                 if let Some(b'&') = input.get(index + 1) {
                     tokens.push(TokenType::And.into());
-                    input_by_token.push(&str_input[index..index + 2]);
                     index += 2;
                 } else {
                     bail!("Unexpected single '&' found while lexing");
@@ -469,7 +458,6 @@ pub fn lex(str_input: &str) -> Result<(Vec<Token>, Vec<&str>, Vec<&str>)> {
             Some(b'|') => {
                 if let Some(b'|') = input.get(index + 1) {
                     tokens.push(TokenType::Or.into());
-                    input_by_token.push(&str_input[index..index + 2]);
                     index += 2;
                 } else {
                     bail!("Unexpected single '|' found while lexing");
@@ -478,105 +466,85 @@ pub fn lex(str_input: &str) -> Result<(Vec<Token>, Vec<&str>, Vec<&str>)> {
             Some(b'=') => {
                 if let Some(b'=') = input.get(index + 1) {
                     tokens.push(TokenType::Eq.into());
-                    input_by_token.push(&str_input[index..index + 2]);
                     index += 2;
                 } else {
                     tokens.push(TokenType::EQUALS.into());
-                    input_by_token.push(&str_input[index..index + 1]);
                     index += 1;
                 }
             }
             Some(b'>') => {
                 if let Some(b'=') = input.get(index + 1) {
                     tokens.push(TokenType::GreaterEq.into());
-                    input_by_token.push(&str_input[index..index + 2]);
                     index += 2;
                 } else {
                     tokens.push(TokenType::Greater.into());
-                    input_by_token.push(&str_input[index..index + 1]);
                     index += 1;
                 }
             }
             Some(b'<') => {
                 if let Some(b'=') = input.get(index + 1) {
                     tokens.push(TokenType::LessEq.into());
-                    input_by_token.push(&str_input[index..index + 2]);
                     index += 2;
                 } else {
                     tokens.push(TokenType::Less.into());
-                    input_by_token.push(&str_input[index..index + 1]);
                     index += 1;
                 }
             }
             Some(b'+') => {
                 tokens.push(TokenType::Add.into());
-                input_by_token.push(&str_input[index..index + 1]);
                 index += 1;
             }
             Some(b'-') => {
                 tokens.push(TokenType::Sub.into());
-                input_by_token.push(&str_input[index..index + 1]);
                 index += 1;
             }
             Some(b'*') => {
                 tokens.push(TokenType::Mul.into());
-                input_by_token.push(&str_input[index..index + 1]);
                 index += 1;
             }
             Some(b'%') => {
                 tokens.push(TokenType::Mod.into());
-                input_by_token.push(&str_input[index..index + 1]);
                 index += 1;
             }
             Some(b'!') => {
                 if let Some(b'=') = input.get(index + 1) {
                     tokens.push(TokenType::Neq.into());
-                    input_by_token.push(&str_input[index..index + 2]);
                     index += 2;
                 } else {
                     tokens.push(TokenType::Not.into());
-                    input_by_token.push(&str_input[index..index + 1]);
                     index += 1;
                 }
             }
             Some(b'{') => {
                 tokens.push(TokenType::LCURLY.into());
-                input_by_token.push(&str_input[index..index + 1]);
                 index += 1;
             }
             Some(b'}') => {
                 tokens.push(TokenType::RCURLY.into());
-                input_by_token.push(&str_input[index..index + 1]);
                 index += 1;
             }
             Some(b'(') => {
                 tokens.push(TokenType::LPAREN.into());
-                input_by_token.push(&str_input[index..index + 1]);
                 index += 1;
             }
             Some(b')') => {
                 tokens.push(TokenType::RPAREN.into());
-                input_by_token.push(&str_input[index..index + 1]);
                 index += 1;
             }
             Some(b'[') => {
                 tokens.push(TokenType::LSQUARE.into());
-                input_by_token.push(&str_input[index..index + 1]);
                 index += 1;
             }
             Some(b']') => {
                 tokens.push(TokenType::RSQUARE.into());
-                input_by_token.push(&str_input[index..index + 1]);
                 index += 1;
             }
             Some(b':') => {
                 tokens.push(TokenType::COLON.into());
-                input_by_token.push(&str_input[index..index + 1]);
                 index += 1;
             }
             Some(b',') => {
                 tokens.push(TokenType::COMMA.into());
-                input_by_token.push(&str_input[index..index + 1]);
                 index += 1;
             }
             // All other legal characters
@@ -591,7 +559,159 @@ pub fn lex(str_input: &str) -> Result<(Vec<Token>, Vec<&str>, Vec<&str>)> {
         }
     }
 
-    Ok((tokens, input_by_token, string_map))
+    Ok((tokens, string_map))
+}
+
+#[allow(clippy::too_many_lines)]
+#[allow(clippy::range_plus_one)]
+#[allow(clippy::must_use_candidate)]
+pub fn input_by_token(str_input: &str, capacity: usize) -> Vec<&str> {
+    measure!("input_by_token");
+    let mut input_by_token = Vec::with_capacity(capacity);
+    let mut skip_newlines_at = 0;
+
+    let input = str_input.as_bytes();
+    let mut index = 0;
+
+    loop {
+        match input.get(index) {
+            None => break,
+            Some(b' ') => index += 1,
+            Some(b'\\') => {
+                index += 2;
+            }
+            Some(b'/') => match input.get(index + 1) {
+                Some(b'*') => {
+                    let mut current_index = index + 2;
+                    loop {
+                        match input.get(current_index) {
+                            Some(b'*') => {
+                                if let Some(b'/') = input.get(current_index + 1) {
+                                    break;
+                                }
+
+                                current_index += 1;
+                            }
+                            _ => current_index += 1,
+                        }
+                    }
+                    index = current_index + 2;
+                }
+                Some(b'/') => {
+                    let mut current_index = index + 2;
+                    loop {
+                        match input.get(current_index) {
+                            Some(b'\n') => break,
+                            _ => current_index += 1,
+                        }
+                    }
+                    // include the newline
+                    current_index += 1;
+
+                    if skip_newlines_at == input_by_token.len() {
+                        input_by_token.push(&str_input[index..current_index]);
+                        skip_newlines_at = input_by_token.len();
+                    }
+
+                    index = current_index;
+                }
+                _ => {
+                    input_by_token.push(&str_input[index..index + 1]);
+                    index += 1;
+                }
+            },
+            Some(b'0'..=b'9') => {
+                let mut current_index = index + 1;
+                let mut is_float = false;
+                loop {
+                    match input.get(current_index) {
+                        Some(b'.') => {
+                            if is_float {
+                                break;
+                            }
+                            is_float = true;
+                            current_index += 1;
+                        }
+                        Some(b'0'..=b'9') => current_index += 1,
+                        // All other legal characters
+                        _ => break,
+                    }
+                }
+
+                let s = &str_input[index..current_index];
+                input_by_token.push(s);
+                index = current_index;
+            }
+            Some(b'.') => {
+                if let Some(b'0'..=b'9') = input.get(index + 1) {
+                    let mut current_index = index + 2;
+                    while let Some(b'0'..=b'9') = input.get(current_index) {
+                        current_index += 1;
+                    }
+
+                    let s = &str_input[index..current_index];
+
+                    input_by_token.push(s);
+
+                    index = current_index;
+                } else {
+                    input_by_token.push(&str_input[index..index + 1]);
+                    index += 1;
+                }
+            }
+            Some(b'"') => {
+                let mut current_index = index + 1;
+                loop {
+                    match input.get(current_index) {
+                        Some(b'"') => break,
+                        _ => current_index += 1,
+                    }
+                }
+
+                input_by_token.push(&str_input[index..current_index + 1]); // Keep the " in the capture
+                index = current_index + 1; // skip the closing "
+            }
+            Some(b'a'..=b'z' | b'A'..=b'Z') => {
+                let mut current_index = index + 1;
+                while let Some(b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_') =
+                    input.get(current_index)
+                {
+                    current_index += 1;
+                }
+                input_by_token.push(&str_input[index..current_index]);
+                index = current_index;
+            }
+            Some(b'\n') => {
+                if skip_newlines_at != input_by_token.len() {
+                    input_by_token.push(&str_input[index..index + 1]);
+                    skip_newlines_at = input_by_token.len();
+                }
+                index += 1;
+            }
+            Some(b'=' | b'>' | b'<' | b'!') => {
+                if let Some(b'=') = input.get(index + 1) {
+                    input_by_token.push(&str_input[index..index + 2]);
+                    index += 2;
+                } else {
+                    input_by_token.push(&str_input[index..index + 1]);
+                    index += 1;
+                }
+            }
+            Some(b'&' | b'|') => {
+                input_by_token.push(&str_input[index..index + 2]);
+                index += 2;
+            }
+            Some(
+                b'+' | b'-' | b'*' | b'%' | b'{' | b'}' | b'(' | b')' | b'[' | b']' | b':' | b',',
+            ) => {
+                input_by_token.push(&str_input[index..index + 1]);
+                index += 1;
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    input_by_token
 }
 
 #[test]
@@ -599,7 +719,7 @@ fn test_lex_correct() {
     test_correct(
         "grader/hw2/lexer-tests1",
         |file: &str, solution_file: &str| {
-            let (tokens, _, string_map) = lex(file).unwrap();
+            let (tokens, string_map) = lex(file).unwrap();
 
             let mut output = String::new();
 

@@ -91,7 +91,7 @@ fn main() {
         return;
     }
 
-    let (tokens, input_by_token, string_map) = match lex::lex(&file) {
+    let (tokens, string_map) = match lex::lex(&file) {
         Ok(tokens) => tokens,
         #[allow(unused_variables)]
         Err(e) => {
@@ -140,7 +140,7 @@ fn main() {
         exit(0);
     }
 
-    let parsed = match parse::parse(&tokens, &input_by_token, &string_map, &file, &path) {
+    let parsed = match parse::parse(&tokens, &string_map, &file, &path) {
         Ok(tokens) => tokens,
         #[allow(unused_variables)]
         Err(e) => {
