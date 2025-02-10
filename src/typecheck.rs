@@ -317,14 +317,6 @@ impl TypeFill for Cmd {
                 for v in let_cleanup {
                     context.vars.remove(&v);
                 }
-
-                for Binding(lv, _) in bindings {
-                    match lv {
-                        LValue::Var(Variable(v)) | LValue::Array(Variable(v), _) => {
-                            context.vars.remove(v);
-                        }
-                    }
-                }
             }
             Cmd::Write(expr, _) => {
                 expr.typefill(context, string_map)?;
@@ -337,13 +329,7 @@ impl TypeFill for Cmd {
                 let dims = 2;
                 let expr_type = Type::Array(Box::new(Type::Struct(0)), 2);
                 match lv {
-                    LValue::Var(Variable(v)) => {
-                        ensure!(
-                            context.vars.insert(*v, expr_type).is_none(),
-                            "Duplicate identifier {}",
-                            string_map[*v]
-                        );
-                    }
+                    LValue::Var(Variable(v)) => context.insert_var(*v, expr_type, string_map)?,
                     LValue::Array(Variable(v), dim_bindings) => {
                         ensure!(
                             dims == dim_bindings.len(),
@@ -352,18 +338,10 @@ impl TypeFill for Cmd {
                             dims
                         );
 
-                        ensure!(
-                            context.vars.insert(*v, expr_type).is_none(),
-                            "Duplicate identifier {}",
-                            string_map[*v]
-                        );
+                        context.insert_var(*v, expr_type, string_map)?;
 
                         for Variable(bind) in dim_bindings {
-                            ensure!(
-                                context.vars.insert(*bind, Type::Int).is_none(),
-                                "Duplicate identifier {}",
-                                string_map[*v]
-                            );
+                            context.insert_var(*bind, Type::Int, string_map)?;
                         }
                     }
                 }
