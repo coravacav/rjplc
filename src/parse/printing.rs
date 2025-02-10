@@ -227,9 +227,16 @@ impl CustomDisplay for Expr {
                     write!(f, "(FalseExpr)")
                 }
             }
-            Expr::Void => write!(f, "(VoidExpr)"),
-            Expr::Variable(s) => {
+            Expr::Void => {
+                if PRINT_TYPES.with(Cell::get) {
+                    write!(f, "(VoidExpr (VoidType))")
+                } else {
+                    write!(f, "(VoidExpr)")
+                }
+            }
+            Expr::Variable(s, ty) => {
                 f.write_str("(VarExpr ")?;
+                ty.fmt_if(f, string_map)?;
                 s.fmt(f, string_map)?;
                 f.write_char(')')
             }
@@ -276,8 +283,9 @@ impl CustomDisplay for Expr {
                 expr2.fmt(f, string_map)?;
                 f.write_char(')')
             }
-            Expr::Call(expr, exprs) => {
+            Expr::Call(expr, exprs, ty) => {
                 f.write_str("(CallExpr ")?;
+                ty.fmt_if(f, string_map)?;
                 expr.fmt(f, string_map)?;
                 if !exprs.is_empty() {
                     f.write_char(' ')?;
@@ -321,8 +329,9 @@ impl CustomDisplay for Expr {
                 expr3.fmt(f, string_map)?;
                 write!(f, ")")
             }
-            Expr::ArrayLoop(fields, expr) => {
+            Expr::ArrayLoop(fields, expr, ty) => {
                 f.write_str("(ArrayLoopExpr ")?;
+                ty.fmt_if(f, string_map)?;
                 if !fields.is_empty() {
                     fields.print_joined(f, string_map, " ")?;
                     f.write_char(' ')?;
@@ -330,8 +339,9 @@ impl CustomDisplay for Expr {
                 expr.fmt(f, string_map)?;
                 write!(f, ")")
             }
-            Expr::SumLoop(fields, expr) => {
+            Expr::SumLoop(fields, expr, ty) => {
                 f.write_str("(SumLoopExpr ")?;
+                ty.fmt_if(f, string_map)?;
                 if !fields.is_empty() {
                     fields.print_joined(f, string_map, " ")?;
                     f.write_char(' ')?;
@@ -408,12 +418,8 @@ impl Type {
 
 impl CustomDisplay for Binding {
     fn fmt(&self, f: &mut String, string_map: &[&str]) -> std::fmt::Result {
-        match self {
-            Binding::Var(s, ty) => {
-                s.fmt(f, string_map)?;
-                f.write_char(' ')?;
-                ty.fmt(f, string_map)
-            }
-        }
+        self.0.fmt(f, string_map)?;
+        f.write_char(' ')?;
+        self.1.fmt(f, string_map)
     }
 }

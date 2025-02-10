@@ -39,6 +39,8 @@ fn test_parse_correct() {
 
     test_correct("grader/hw6/ok", tester);
     test_correct("grader/hw6/ok-fuzzer", tester);
+    test_correct("grader/hw7/ok", tester);
+    test_correct("grader/hw7/ok-fuzzer", tester);
     print_timings();
 }
 
@@ -55,7 +57,7 @@ fn test_parse_fails() {
 
         match typecheck(&mut cmds, &string_map) {
             Ok(()) => {
-                panic!("expected parse to fail");
+                panic!("expected typecheck to fail");
             }
             Err(e) => {
                 #[cfg(not(feature = "measure"))]
@@ -67,5 +69,7 @@ fn test_parse_fails() {
     test_solos("grader/hw6/fail-fuzzer1", tester);
     test_solos("grader/hw6/fail-fuzzer2", tester);
     test_solos("grader/hw6/fail-fuzzer3", tester);
+    test_solos("grader/hw7/fail", tester);
+    test_solos("grader/hw7/fail-fuzzer", tester);
     print_timings();
 }

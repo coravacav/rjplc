@@ -225,7 +225,10 @@ impl CustomDisplay for Token {
 pub fn lex(str_input: &str) -> Result<(Vec<Token>, Vec<&str>)> {
     measure!("lex");
     let mut tokens: Vec<Token> = vec![];
-    let mut string_map: Vec<&str> = vec!["rgba", "r", "g", "b", "a"];
+    let mut string_map: Vec<&str> = vec![
+        "rgba", "r", "g", "b", "a", "sqrt", "exp", "sin", "cos", "tan", "asin", "acos", "atan",
+        "log", "pow", "atan2", "to_float", "to_int", "args", "argnum",
+    ];
     let mut dedup_string_map: AHashMap<&str, usize> = string_map
         .iter()
         .enumerate()

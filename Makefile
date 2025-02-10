@@ -1,4 +1,5 @@
 TEST=test.jpl
+FLAGS=
 
 .PHONY: compile
 
@@ -8,7 +9,7 @@ compile:
 	cargo build --release --features homework
 
 run:
-	target/release/rjplc $(TEST)
+	target/release/rjplc $(FLAGS) $(TEST) 
 
 clean:
 	target

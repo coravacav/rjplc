@@ -47,7 +47,7 @@ impl<'a, 'b> Consume<'a, 'b> for LiteralString {
 }
 
 #[derive(Debug, Clone)]
-pub struct LoopField(Variable, Expr);
+pub struct LoopField(pub Variable, pub Expr);
 
 impl<'a, 'b> Consume<'a, 'b> for LoopField {
     fn consume(parser: Parser, data: &'b StaticParserData<'a>) -> ParseResult<'a, Self> {
@@ -243,20 +243,20 @@ pub enum Expr {
     True,
     False,
     Void,
-    Variable(Variable),
+    Variable(Variable, Type),
     ArrayLiteral(Vec<Expr>, Type),
     TupleLiteral(Vec<Expr>),
     Paren(Box<Expr>),
     ArrayIndex(Box<Expr>, Vec<Expr>, Type),
     Binop(Box<Expr>, Op, Box<Expr>, Type),
-    Call(Variable, Vec<Expr>),
+    Call(Variable, Vec<Expr>, Type),
     TupleIndex(Box<Expr>, Vec<Expr>),
     StructLiteral(Variable, Vec<Expr>, Type),
     Dot(Box<Expr>, Variable, Type),
     Unop(Op, Box<Expr>, Type),
     If(Box<Expr>, Box<Expr>, Box<Expr>, Type),
-    ArrayLoop(Vec<LoopField>, Box<Expr>),
-    SumLoop(Vec<LoopField>, Box<Expr>),
+    ArrayLoop(Vec<LoopField>, Box<Expr>, Type),
+    SumLoop(Vec<LoopField>, Box<Expr>, Type),
 }
 
 impl Expr {
@@ -267,7 +267,7 @@ impl Expr {
             Expr::TupleIndex(_, _) | Expr::ArrayIndex(_, _, _) => 7,
             Expr::Unop(_, _, _) => Self::UNOP_PRECEDENCE,
             Expr::Binop(_, op, _, _) => op.precedence(),
-            Expr::If(_, _, _, _) | Expr::ArrayLoop(_, _) | Expr::SumLoop(_, _) => 1,
+            Expr::If(_, _, _, _) | Expr::ArrayLoop(_, _, _) | Expr::SumLoop(_, _, _) => 1,
             _ => u8::MAX,
         }
     }
@@ -282,9 +282,13 @@ impl Expr {
             Expr::Void => Type::Void,
             Expr::ArrayLiteral(_, ty)
             | Expr::StructLiteral(_, _, ty)
+            | Expr::ArrayLoop(_, _, ty)
+            | Expr::SumLoop(_, _, ty)
             | Expr::Dot(_, _, ty)
             | Expr::Binop(_, _, _, ty)
             | Expr::Unop(_, _, ty)
+            | Expr::Variable(_, ty)
+            | Expr::Call(_, _, ty)
             | Expr::If(_, _, _, ty)
             | Expr::ArrayIndex(_, _, ty) => ty.clone(),
             // Expr::Binop(_, Op(TokenType::Eq), _, _) => Type::Bool,
@@ -352,7 +356,7 @@ impl<'a, 'b> Consume<'a, 'b> for Expr {
             (parser, TokenType::VOID) => (parser, Expr::Void),
             (parser, TokenType::TRUE) => (parser, Expr::True),
             (parser, TokenType::FALSE) => (parser, Expr::False),
-            (parser, TokenType::VARIABLE) => (parser, Expr::Variable(Variable(next.1.get_index()))),
+            (parser, TokenType::VARIABLE) => (parser, Expr::Variable(Variable(next.1.get_index()), Type::None)),
             (mut parser, TokenType::LSQUARE) => {
                 consume_list!(parser, data, RSQUARE, exprs);
                 (parser, Expr::ArrayLiteral(exprs, Type::None))
@@ -378,13 +382,13 @@ impl<'a, 'b> Consume<'a, 'b> for Expr {
                 check!(parser, data, LSQUARE);
                 consume_list!(parser, data, RSQUARE, fields);
                 consume!(parser, data, Expr, expr);
-                (parser, Expr::ArrayLoop(fields, Box::new(expr)))
+                (parser, Expr::ArrayLoop(fields, Box::new(expr), Type::None))
             }
             (mut parser, TokenType::SUM) => {
                 check!(parser, data, LSQUARE);
                 consume_list!(parser, data, RSQUARE, fields);
                 consume!(parser, data, Expr, expr);
-                (parser, Expr::SumLoop(fields, Box::new(expr)))
+                (parser, Expr::SumLoop(fields, Box::new(expr), Type::None))
             }
             (_, t) => miss!(parser,
                 "expected start of expression (INTVAL | FLOATVAL | TRUE | FALSE | VARIABLE | LSQUARE | LPAREN | LCURLY), found {t:?}"
@@ -397,11 +401,11 @@ impl<'a, 'b> Consume<'a, 'b> for Expr {
                     consume_list!(parser, data, RSQUARE, exprs);
                     (parser, Expr::ArrayIndex(Box::new(expr), exprs, Type::None))
                 }
-                ((mut parser, TokenType::LPAREN), Expr::Variable(s)) => {
+                ((mut parser, TokenType::LPAREN), Expr::Variable(s, _)) => {
                     consume_list!(parser, data, RPAREN, exprs);
-                    (parser, Expr::Call(*s, exprs))
+                    (parser, Expr::Call(*s, exprs, Type::None))
                 }
-                ((mut parser, TokenType::LCURLY), Expr::Variable(s)) => {
+                ((mut parser, TokenType::LCURLY), Expr::Variable(s, _)) => {
                     consume_list!(parser, data, RCURLY, exprs);
                     (parser, Expr::StructLiteral(*s, exprs, Type::None))
                 }
@@ -594,9 +598,7 @@ impl<'a, 'b> Consume<'a, 'b> for Type {
 }
 
 #[derive(Debug, Clone)]
-pub enum Binding {
-    Var(LValue, Type),
-}
+pub struct Binding(pub LValue, pub Type);
 
 impl<'a, 'b> Consume<'a, 'b> for Binding {
     fn consume(parser: Parser, data: &'b StaticParserData<'a>) -> ParseResult<'a, Self> {
@@ -605,7 +607,7 @@ impl<'a, 'b> Consume<'a, 'b> for Binding {
             consume!(parser, data, LValue, lv);
             check!(parser, data, COLON);
             consume!(parser, data, Type, ty);
-            parser.complete(Binding::Var(lv, ty))
+            parser.complete(Binding(lv, ty))
         })
     }
 }
