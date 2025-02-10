@@ -1,5 +1,6 @@
 use std::fmt::Write;
 
+use ahash::AHashMap;
 use anyhow::{bail, Result};
 
 use crate::{measure, CustomDisplay};
@@ -224,7 +225,12 @@ impl CustomDisplay for Token {
 pub fn lex(str_input: &str) -> Result<(Vec<Token>, Vec<&str>)> {
     measure!("lex");
     let mut tokens: Vec<Token> = vec![];
-    let mut string_map: Vec<&str> = vec![];
+    let mut string_map: Vec<&str> = vec!["rgba", "r", "g", "b", "a"];
+    let mut dedup_string_map: AHashMap<&str, usize> = string_map
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (*s, i))
+        .collect();
 
     let input = str_input.as_bytes();
     let mut index = 0;
@@ -316,8 +322,10 @@ pub fn lex(str_input: &str) -> Result<(Vec<Token>, Vec<&str>)> {
 
                 let s = &str_input[index..current_index];
 
-                string_map.push(s);
-                let next_index = string_map.len() - 1;
+                let next_index = *dedup_string_map.entry(s).or_insert_with(|| {
+                    string_map.push(s);
+                    string_map.len() - 1
+                });
 
                 if is_float {
                     tokens.push(Token::new(TokenType::FLOATVAL).set_index(next_index));
@@ -344,8 +352,10 @@ pub fn lex(str_input: &str) -> Result<(Vec<Token>, Vec<&str>)> {
 
                     let s = &str_input[index..current_index];
 
-                    string_map.push(s);
-                    let next_index = string_map.len() - 1;
+                    let next_index = *dedup_string_map.entry(s).or_insert_with(|| {
+                        string_map.push(s);
+                        string_map.len() - 1
+                    });
 
                     tokens.push(Token::new(TokenType::FLOATVAL).set_index(next_index));
 
@@ -369,8 +379,10 @@ pub fn lex(str_input: &str) -> Result<(Vec<Token>, Vec<&str>)> {
 
                 let s = &str_input[index + 1..current_index];
 
-                string_map.push(s);
-                let next_index = string_map.len() - 1;
+                let next_index = *dedup_string_map.entry(s).or_insert_with(|| {
+                    string_map.push(s);
+                    string_map.len() - 1
+                });
 
                 tokens.push(Token::new(TokenType::STRING).set_index(next_index));
                 index = current_index + 1; // skip the closing "
@@ -415,8 +427,11 @@ pub fn lex(str_input: &str) -> Result<(Vec<Token>, Vec<&str>)> {
                     "write" => TokenType::WRITE.into(),
                     "type" => TokenType::TYPE.into(),
                     s => {
-                        string_map.push(s);
-                        let next_index = string_map.len() - 1;
+                        let next_index = *dedup_string_map.entry(s).or_insert_with(|| {
+                            string_map.push(s);
+                            string_map.len() - 1
+                        });
+
                         Token::new(TokenType::VARIABLE).set_index(next_index)
                     }
                 };

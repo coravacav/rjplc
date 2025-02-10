@@ -1,10 +1,13 @@
 #![deny(clippy::pedantic)]
 
+use std::cell::Cell;
+
 use itertools::Itertools;
 
 pub mod lex;
 pub mod measure;
 pub mod parse;
+pub mod typecheck;
 
 #[derive(Debug, Clone, Copy)]
 enum UndoSliceSelection<'a> {
@@ -171,4 +174,8 @@ pub trait CustomDisplay {
     /// # Errors
     /// Normal `std::fmt::Result` error conditions on writes.
     fn fmt(&self, f: &mut String, string_map: &[&str]) -> std::fmt::Result;
+}
+
+thread_local! {
+    static PRINT_TYPES: Cell<bool> = const { Cell::new(false) };
 }

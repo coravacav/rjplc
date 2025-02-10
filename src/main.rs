@@ -4,7 +4,7 @@ use std::{io::stdout, path::PathBuf, process::exit};
 
 use clap::Parser;
 use measure::print_timings;
-use rjplc::{lex, measure, parse, CustomDisplay};
+use rjplc::{lex, measure, parse, typecheck, CustomDisplay};
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -140,8 +140,8 @@ fn main() {
         exit(0);
     }
 
-    let parsed = match parse::parse(&tokens, &string_map, &file, &path) {
-        Ok(tokens) => tokens,
+    let mut cmds = match parse::parse(&tokens, &string_map, &file, &path) {
+        Ok(cmds) => cmds,
         #[allow(unused_variables)]
         Err(e) => {
             #[cfg(feature = "homework")]
@@ -171,8 +171,8 @@ fn main() {
                 use std::fmt::Write;
                 let mut output = String::new();
 
-                for parsed in &parsed {
-                    parsed.fmt(&mut output, &string_map).unwrap();
+                for cmd in &cmds {
+                    cmd.fmt(&mut output, &string_map).unwrap();
                     output.push('\n');
                 }
                 writeln!(output, "Compilation succeeded").unwrap();
@@ -189,5 +189,46 @@ fn main() {
         exit(0);
     }
 
-    let _ = parsed;
+    if let Err(e) = typecheck::typecheck(&mut cmds, &string_map) {
+        #[cfg(feature = "homework")]
+        println!("Compilation failed");
+        #[cfg(not(feature = "homework"))]
+        println!("Compilation failed {e}");
+
+        print_timings();
+
+        return;
+    };
+
+    #[cfg(feature = "measure")]
+    if measure_repeat > 0 {
+        for _ in 0..reps {
+            let _ = std::hint::black_box(typecheck::typecheck(&parsed));
+        }
+    }
+
+    if !quiet {
+        use std::io::Write;
+
+        let output = {
+            measure!("out");
+            use std::fmt::Write;
+            let mut output = String::new();
+
+            for cmd in &cmds {
+                cmd.fmt(&mut output, &string_map).unwrap();
+                output.push('\n');
+            }
+            writeln!(output, "Compilation succeeded").unwrap();
+
+            output
+        };
+
+        measure!("write output");
+        stdout().write_all(output.as_bytes()).unwrap();
+    }
+
+    print_timings();
+
+    exit(0);
 }

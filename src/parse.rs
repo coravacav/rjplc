@@ -17,7 +17,7 @@ mod printing;
 mod tests;
 
 #[derive(Debug, Clone, Copy)]
-pub struct Variable(usize);
+pub struct Variable(pub usize);
 
 impl<'a, 'b> Consume<'a, 'b> for Variable {
     fn consume(parser: Parser, data: &'b StaticParserData<'a>) -> ParseResult<'a, Self> {
@@ -62,7 +62,7 @@ impl<'a, 'b> Consume<'a, 'b> for LoopField {
 }
 
 #[derive(Debug, Clone)]
-pub struct Field(Variable, Type);
+pub struct Field(pub Variable, pub Type);
 
 impl<'a, 'b> Consume<'a, 'b> for Field {
     fn consume(parser: Parser, data: &'b StaticParserData<'a>) -> ParseResult<'a, Self> {
@@ -210,7 +210,7 @@ impl<'a, 'b> Consume<'a, 'b> for Statement {
 
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy)]
-pub struct Op(TokenType);
+pub struct Op(pub TokenType);
 
 impl Op {
     const fn precedence(self) -> u8 {
@@ -244,17 +244,17 @@ pub enum Expr {
     False,
     Void,
     Variable(Variable),
-    ArrayLiteral(Vec<Expr>),
+    ArrayLiteral(Vec<Expr>, Type),
     TupleLiteral(Vec<Expr>),
     Paren(Box<Expr>),
-    ArrayIndex(Box<Expr>, Vec<Expr>),
-    Binop(Box<Expr>, Op, Box<Expr>),
+    ArrayIndex(Box<Expr>, Vec<Expr>, Type),
+    Binop(Box<Expr>, Op, Box<Expr>, Type),
     Call(Variable, Vec<Expr>),
     TupleIndex(Box<Expr>, Vec<Expr>),
-    StructLiteral(Variable, Vec<Expr>),
-    Dot(Box<Expr>, Variable),
-    Unop(Op, Box<Expr>),
-    If(Box<Expr>, Box<Expr>, Box<Expr>),
+    StructLiteral(Variable, Vec<Expr>, Type),
+    Dot(Box<Expr>, Variable, Type),
+    Unop(Op, Box<Expr>, Type),
+    If(Box<Expr>, Box<Expr>, Box<Expr>, Type),
     ArrayLoop(Vec<LoopField>, Box<Expr>),
     SumLoop(Vec<LoopField>, Box<Expr>),
 }
@@ -264,11 +264,31 @@ impl Expr {
 
     const fn precedence(&self) -> u8 {
         match self {
-            Expr::TupleIndex(_, _) | Expr::ArrayIndex(_, _) => 7,
-            Expr::Unop(_, _) => Self::UNOP_PRECEDENCE,
-            Expr::Binop(_, op, _) => op.precedence(),
-            Expr::If(_, _, _) | Expr::ArrayLoop(_, _) | Expr::SumLoop(_, _) => 1,
+            Expr::TupleIndex(_, _) | Expr::ArrayIndex(_, _, _) => 7,
+            Expr::Unop(_, _, _) => Self::UNOP_PRECEDENCE,
+            Expr::Binop(_, op, _, _) => op.precedence(),
+            Expr::If(_, _, _, _) | Expr::ArrayLoop(_, _) | Expr::SumLoop(_, _) => 1,
             _ => u8::MAX,
+        }
+    }
+
+    #[must_use]
+    pub fn get_type(&self) -> Type {
+        match self {
+            Expr::Int(_, _) => Type::Int,
+            Expr::Float(_, _) => Type::Float,
+            Expr::True | Expr::False | Expr::Binop(_, Op(TokenType::Eq), _, _) => Type::Bool,
+            Expr::Paren(expr) => expr.get_type(),
+            Expr::Void => Type::Void,
+            Expr::ArrayLiteral(_, ty)
+            | Expr::StructLiteral(_, _, ty)
+            | Expr::Dot(_, _, ty)
+            | Expr::Binop(_, _, _, ty)
+            | Expr::Unop(_, _, ty)
+            | Expr::If(_, _, _, ty)
+            | Expr::ArrayIndex(_, _, ty) => ty.clone(),
+            // Expr::Binop(_, Op(TokenType::Eq), _, _) => Type::Bool,
+            _ => todo!("get type of {self:?}"),
         }
     }
 }
@@ -286,10 +306,10 @@ impl<'a, 'b> Consume<'a, 'b> for Expr {
                     right_expr: Expr,
                 ) -> Expr {
                     if Expr::UNOP_PRECEDENCE < right_expr.precedence() {
-                        Expr::Unop(op, Box::new(right_expr))
+                        Expr::Unop(op, Box::new(right_expr), Type::None)
                     } else {
                         match right_expr {
-                            Expr::Binop(mut right_expr_left, c2, right_expr_right) => Expr::Binop(
+                            Expr::Binop(mut right_expr_left, c2, right_expr_right, _) => Expr::Binop(
                                 {
                                     // reuxe the allocation from right_expr_left 
                                     *right_expr_left = rearrange_according_to_precedence(op,*right_expr_left);
@@ -297,8 +317,9 @@ impl<'a, 'b> Consume<'a, 'b> for Expr {
                                 },
                                 c2,
                                 right_expr_right,
+                                Type::None,
                             ),
-                            expr => Expr::Unop(op, Box::new(expr)),
+                            expr => Expr::Unop(op, Box::new(expr), Type::None),
                         }
                     }
                 }
@@ -334,7 +355,7 @@ impl<'a, 'b> Consume<'a, 'b> for Expr {
             (parser, TokenType::VARIABLE) => (parser, Expr::Variable(Variable(next.1.get_index()))),
             (mut parser, TokenType::LSQUARE) => {
                 consume_list!(parser, data, RSQUARE, exprs);
-                (parser, Expr::ArrayLiteral(exprs))
+                (parser, Expr::ArrayLiteral(exprs, Type::None))
             }
             (mut parser, TokenType::LPAREN) => {
                 consume!(parser, data, Expr, expr);
@@ -351,7 +372,7 @@ impl<'a, 'b> Consume<'a, 'b> for Expr {
                 consume!(parser, data, Expr, expr2);
                 check!(parser, data, ELSE);
                 consume!(parser, data, Expr, expr3);
-                (parser, Expr::If(Box::new(expr), Box::new(expr2), Box::new(expr3)))
+                (parser, Expr::If(Box::new(expr), Box::new(expr2), Box::new(expr3), Type::None))
             }
             (mut parser, TokenType::ARRAY) => {
                 check!(parser, data, LSQUARE);
@@ -374,7 +395,7 @@ impl<'a, 'b> Consume<'a, 'b> for Expr {
             let (rem_parser, new_expr) = match (parser.next_type(data), &expr) {
                 ((mut parser, TokenType::LSQUARE), _) => {
                     consume_list!(parser, data, RSQUARE, exprs);
-                    (parser, Expr::ArrayIndex(Box::new(expr), exprs))
+                    (parser, Expr::ArrayIndex(Box::new(expr), exprs, Type::None))
                 }
                 ((mut parser, TokenType::LPAREN), Expr::Variable(s)) => {
                     consume_list!(parser, data, RPAREN, exprs);
@@ -382,7 +403,7 @@ impl<'a, 'b> Consume<'a, 'b> for Expr {
                 }
                 ((mut parser, TokenType::LCURLY), Expr::Variable(s)) => {
                     consume_list!(parser, data, RCURLY, exprs);
-                    (parser, Expr::StructLiteral(*s, exprs))
+                    (parser, Expr::StructLiteral(*s, exprs, Type::None))
                 }
                 ((mut parser, TokenType::LCURLY), _) => {
                     consume_list!(parser, data, RCURLY, exprs);
@@ -390,7 +411,7 @@ impl<'a, 'b> Consume<'a, 'b> for Expr {
                 }
                 ((mut parser, TokenType::DOT), _) => {
                     consume!(parser, data, Variable, var);
-                    (parser, Expr::Dot(Box::new(expr), var))
+                    (parser, Expr::Dot(Box::new(expr), var, Type::None))
                 }
                 (
                     (
@@ -418,10 +439,10 @@ impl<'a, 'b> Consume<'a, 'b> for Expr {
                         right_expr: Expr,
                     ) -> Expr {
                         if op.precedence() < right_expr.precedence() {
-                            Expr::Binop(Box::new(new_expr), op, Box::new(right_expr))
+                            Expr::Binop(Box::new(new_expr), op, Box::new(right_expr), Type::None)
                         } else {
                             match right_expr {
-                                Expr::Binop(mut right_expr_left, c2, right_expr_right) => {
+                                Expr::Binop(mut right_expr_left, c2, right_expr_right, _) => {
                                     Expr::Binop(
                                         {
                                             // reuxe the allocation from right_expr_left
@@ -434,9 +455,15 @@ impl<'a, 'b> Consume<'a, 'b> for Expr {
                                         },
                                         c2,
                                         right_expr_right,
+                                        Type::None,
                                     )
                                 }
-                                _ => Expr::Binop(Box::new(new_expr), op, Box::new(right_expr)),
+                                _ => Expr::Binop(
+                                    Box::new(new_expr),
+                                    op,
+                                    Box::new(right_expr),
+                                    Type::None,
+                                ),
                             }
                         }
                     }
@@ -502,13 +529,14 @@ pub enum Type {
     Bool,
     Void,
     Tuple(Vec<Type>),
+    None,
 }
 
 impl PartialEq for Type {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Type::Struct(s), Type::Struct(o)) => s == o,
-            (Type::Array(s, _), Type::Array(o, _)) => std::ptr::eq(&**s, &**o),
+            (Type::Array(s, _), Type::Array(o, _)) => s == o,
             (Type::Float, Type::Float)
             | (Type::Int, Type::Int)
             | (Type::Bool, Type::Bool)

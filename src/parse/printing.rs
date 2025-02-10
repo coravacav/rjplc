@@ -1,8 +1,10 @@
+use std::cell::Cell;
+
 use super::{
     Binding, Cmd, Expr, Field, LValue, LiteralString, LoopField, Op, Statement, TokenType, Type,
     Variable, Write,
 };
-use crate::CustomDisplay;
+use crate::{CustomDisplay, PRINT_TYPES};
 
 trait PrintJoined {
     fn print_joined(&self, f: &mut String, string_map: &[&str], sep: &str) -> std::fmt::Result;
@@ -173,19 +175,36 @@ impl CustomDisplay for Expr {
     #[allow(clippy::too_many_lines)]
     fn fmt(&self, f: &mut String, string_map: &[&str]) -> std::fmt::Result {
         match self {
-            Expr::Int(_, i) => write!(f, "(IntExpr {})", {
-                let i = string_map[*i].trim_start_matches('0');
-                if i.is_empty() {
-                    "0"
+            Expr::Int(_, i) => {
+                let i = {
+                    let i = string_map[*i].trim_start_matches('0');
+                    if i.is_empty() {
+                        "0"
+                    } else {
+                        i
+                    }
+                };
+
+                if PRINT_TYPES.with(Cell::get) {
+                    write!(f, "(IntExpr (IntType) {i})")
                 } else {
-                    i
+                    write!(f, "(IntExpr {i})")
                 }
-            }),
+            }
             Expr::Float(fl, s_fl) => string_map[*s_fl]
                 .split_once('.')
                 .map(|(trunc, _)| {
                     let trunc = trunc.trim_start_matches('0');
-                    if trunc.is_empty() {
+
+                    if PRINT_TYPES.with(Cell::get) {
+                        if trunc.is_empty() {
+                            write!(f, "(FloatExpr (FloatType) 0)")
+                        } else if trunc.len() > 15 {
+                            write!(f, "(FloatExpr (FloatType) {})", fl.trunc())
+                        } else {
+                            write!(f, "(FloatExpr (FloatType) {trunc})")
+                        }
+                    } else if trunc.is_empty() {
                         write!(f, "(FloatExpr 0)")
                     } else if trunc.len() > 15 {
                         write!(f, "(FloatExpr {})", fl.trunc())
@@ -194,8 +213,20 @@ impl CustomDisplay for Expr {
                     }
                 })
                 .unwrap(),
-            Expr::True => write!(f, "(TrueExpr)"),
-            Expr::False => write!(f, "(FalseExpr)"),
+            Expr::True => {
+                if PRINT_TYPES.with(Cell::get) {
+                    write!(f, "(TrueExpr (BoolType))")
+                } else {
+                    write!(f, "(TrueExpr)")
+                }
+            }
+            Expr::False => {
+                if PRINT_TYPES.with(Cell::get) {
+                    write!(f, "(FalseExpr (BoolType))")
+                } else {
+                    write!(f, "(FalseExpr)")
+                }
+            }
             Expr::Void => write!(f, "(VoidExpr)"),
             Expr::Variable(s) => {
                 f.write_str("(VarExpr ")?;
@@ -203,11 +234,12 @@ impl CustomDisplay for Expr {
                 f.write_char(')')
             }
             Expr::Paren(expr) => expr.fmt(f, string_map),
-            Expr::ArrayLiteral(exprs) => {
+            Expr::ArrayLiteral(exprs, ty) => {
                 if exprs.is_empty() {
                     f.write_str("(ArrayLiteralExpr)")
                 } else {
                     f.write_str("(ArrayLiteralExpr ")?;
+                    ty.fmt_if(f, string_map)?;
                     exprs.print_joined(f, string_map, " ")?;
                     f.write_char(')')
                 }
@@ -217,8 +249,9 @@ impl CustomDisplay for Expr {
                 exprs.print_joined(f, string_map, " ")?;
                 f.write_char(')')
             }
-            Expr::ArrayIndex(s, exprs) => {
+            Expr::ArrayIndex(s, exprs, ty) => {
                 f.write_str("(ArrayIndexExpr ")?;
+                ty.fmt_if(f, string_map)?;
                 s.fmt(f, string_map)?;
                 if !exprs.is_empty() {
                     f.write_char(' ')?;
@@ -233,8 +266,9 @@ impl CustomDisplay for Expr {
                 exprs.print_joined(f, string_map, " ")?;
                 f.write_char(')')
             }
-            Expr::Binop(expr, op, expr2) => {
+            Expr::Binop(expr, op, expr2, ty) => {
                 f.write_str("(BinopExpr ")?;
+                ty.fmt_if(f, string_map)?;
                 expr.fmt(f, string_map)?;
                 f.write_char(' ')?;
                 op.fmt(f, string_map)?;
@@ -251,8 +285,9 @@ impl CustomDisplay for Expr {
                 }
                 write!(f, ")")
             }
-            Expr::StructLiteral(s, exprs) => {
+            Expr::StructLiteral(s, exprs, ty) => {
                 f.write_str("(StructLiteralExpr ")?;
+                ty.fmt_if(f, string_map)?;
                 s.fmt(f, string_map)?;
                 if !exprs.is_empty() {
                     f.write_char(' ')?;
@@ -260,22 +295,25 @@ impl CustomDisplay for Expr {
                 }
                 write!(f, ")")
             }
-            Expr::Dot(expr, s) => {
+            Expr::Dot(expr, s, ty) => {
                 f.write_str("(DotExpr ")?;
+                ty.fmt_if(f, string_map)?;
                 expr.fmt(f, string_map)?;
                 f.write_char(' ')?;
                 s.fmt(f, string_map)?;
                 write!(f, ")")
             }
-            Expr::Unop(op, expr) => {
+            Expr::Unop(op, expr, ty) => {
                 f.write_str("(UnopExpr ")?;
+                ty.fmt_if(f, string_map)?;
                 op.fmt(f, string_map)?;
                 f.write_char(' ')?;
                 expr.fmt(f, string_map)?;
                 write!(f, ")")
             }
-            Expr::If(expr, expr2, expr3) => {
+            Expr::If(expr, expr2, expr3, ty) => {
                 f.write_str("(IfExpr ")?;
+                ty.fmt_if(f, string_map)?;
                 expr.fmt(f, string_map)?;
                 f.write_char(' ')?;
                 expr2.fmt(f, string_map)?;
@@ -352,9 +390,22 @@ impl CustomDisplay for Type {
                 tys.print_joined(f, string_map, " ")?;
                 f.write_char(')')
             }
+            Type::None => Ok(()),
         }
     }
 }
+
+impl Type {
+    /// # Errors
+    pub fn fmt_if(&self, f: &mut String, string_map: &[&str]) -> std::fmt::Result {
+        match self {
+            Type::None => return Ok(()),
+            _ => self.fmt(f, string_map)?,
+        }
+        f.write_char(' ')
+    }
+}
+
 impl CustomDisplay for Binding {
     fn fmt(&self, f: &mut String, string_map: &[&str]) -> std::fmt::Result {
         match self {
