@@ -195,26 +195,10 @@ impl CustomDisplay for Token {
             TokenType::VOID => f.write_str("VOID 'void'"),
             TokenType::WRITE => f.write_str("WRITE 'write'"),
             TokenType::TYPE => f.write_str("TYPE 'type'"),
-            TokenType::VARIABLE => {
-                f.write_str("VARIABLE '")?;
-                f.write_str(string_map[self.get_index()])?;
-                f.write_char('\'')
-            }
-            TokenType::STRING => {
-                f.write_str("STRING '\"")?;
-                f.write_str(string_map[self.get_index()])?;
-                f.write_str("\"'")
-            }
-            TokenType::FLOATVAL => {
-                f.write_str("FLOATVAL '")?;
-                f.write_str(string_map[self.get_index()])?;
-                f.write_char('\'')
-            }
-            TokenType::INTVAL => {
-                f.write_str("INTVAL '")?;
-                f.write_str(string_map[self.get_index()])?;
-                f.write_char('\'')
-            }
+            TokenType::VARIABLE => write!(f, "VARIABLE '{}'", string_map[self.get_index()]),
+            TokenType::STRING => write!(f, "STRING '\"{}\"'", string_map[self.get_index()]),
+            TokenType::FLOATVAL => write!(f, "FLOATVAL '{}'", string_map[self.get_index()]),
+            TokenType::INTVAL => write!(f, "INTVAL '{}'", string_map[self.get_index()]),
             TokenType::Add => f.write_str("OP '+'"),
             TokenType::Sub => f.write_str("OP '-'"),
             TokenType::Mul => f.write_str("OP '*'"),
@@ -547,8 +531,6 @@ pub fn lex(str_input: &str) -> Result<(Vec<Token>, Vec<&str>)> {
                 tokens.push(TokenType::COMMA.into());
                 index += 1;
             }
-            // All other legal characters
-            // Some(32..=126) => {}
             Some(c) => bail!("illegal character '{}' found while lexing", *c as char),
         }
 
