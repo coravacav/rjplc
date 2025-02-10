@@ -106,13 +106,6 @@ impl CustomDisplay for Cmd {
                 statements.print_joined(f, string_map, " ")?;
                 f.write_char(')')
             }
-            Cmd::Type(name, ty) => {
-                f.write_str("(TypeCmd ")?;
-                name.fmt(f, string_map)?;
-                f.write_char(' ')?;
-                ty.fmt(f, string_map)?;
-                f.write_char(')')
-            }
             Cmd::Struct(name, fields) => {
                 f.write_str("(StructCmd ")?;
                 name.fmt(f, string_map)?;
@@ -365,11 +358,6 @@ impl CustomDisplay for LValue {
                 s.fmt(f, string_map)?;
                 f.write_char(' ')?;
                 args.print_joined(f, string_map, " ")?;
-                write!(f, ")")
-            }
-            LValue::Tuple(lvs) => {
-                f.write_str("(TupleLValue ")?;
-                lvs.print_joined(f, string_map, " ")?;
                 write!(f, ")")
             }
         }

@@ -86,7 +86,6 @@ pub enum Cmd {
     Show(Expr),
     Time(Box<Cmd>),
     Fn(Variable, Vec<Binding>, Type, Vec<Statement>),
-    Type(Variable, Type),
     Struct(Variable, Vec<Field>),
 }
 
@@ -148,13 +147,6 @@ impl<'a, 'b> Consume<'a, 'b> for Cmd {
                 check!(parser, data, NEWLINE);
                 consume_list!(parser, data, RCURLY, NEWLINE, true, statements);
                 parser.complete(Self::Fn(v, bindings, ty, statements))
-            }
-            (mut parser, TokenType::TYPE) => {
-                consume!(parser, data, Variable, v);
-                check!(parser, data, EQUALS);
-                consume!(parser, data, Type, ty);
-                check!(parser, data, NEWLINE);
-                parser.complete(Self::Type(v, ty))
             }
             (mut parser, TokenType::STRUCT) => {
                 consume!(parser, data, Variable, v);
@@ -492,7 +484,6 @@ impl<'a, 'b> Consume<'a, 'b> for Expr {
 pub enum LValue {
     Var(Variable),
     Array(Variable, Vec<Variable>),
-    Tuple(Vec<LValue>),
 }
 
 impl<'a, 'b> Consume<'a, 'b> for LValue {
@@ -501,10 +492,6 @@ impl<'a, 'b> Consume<'a, 'b> for LValue {
         let next = parser.next(data);
         let (parser, lv) = match (next.0, next.1.get_type()) {
             (parser, TokenType::VARIABLE) => (parser, LValue::Var(Variable(next.1.get_index()))),
-            (mut parser, TokenType::LCURLY) => {
-                consume_list!(parser, data, RCURLY, lvs);
-                (parser, LValue::Tuple(lvs))
-            }
             (_, t) => miss!(
                 parser,
                 "expected start of lvalue (VARIABLE | LCURLY), found {t:?}"

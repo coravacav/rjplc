@@ -245,7 +245,6 @@ impl TypeFill for Cmd {
                                 context.insert_var(*bind, Type::Int, string_map)?;
                             }
                         }
-                        _ => todo!(),
                     }
                 }
 
@@ -324,7 +323,6 @@ impl TypeFill for Cmd {
                         LValue::Var(Variable(v)) | LValue::Array(Variable(v), _) => {
                             context.vars.remove(v);
                         }
-                        _ => todo!(),
                     }
                 }
             }
@@ -368,7 +366,6 @@ impl TypeFill for Cmd {
                             );
                         }
                     }
-                    _ => todo!(),
                 }
             }
             Cmd::Time(cmd) => {
@@ -384,7 +381,6 @@ impl TypeFill for Cmd {
                 );
             }
             Cmd::Print(_) => {}
-            _ => todo!("{self:?}"),
         };
 
         Ok(())
@@ -509,11 +505,9 @@ impl TypeFill for Expr {
 
                 *ty = Type::Array(
                     Box::new(ty.clone()),
-                    match ty {
-                        // TODO ?
-                        //Type::Array(_, d) => *d + 1,
-                        _ => 1,
-                    },
+                    // TODO ?
+                    //Type::Array(_, d) => *d + 1,
+                    1,
                 );
             }
             Expr::StructLiteral(Variable(v), exprs, ty) => {
