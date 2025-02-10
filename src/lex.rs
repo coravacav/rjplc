@@ -1,6 +1,6 @@
 use std::fmt::Write;
 
-use color_eyre::eyre::{bail, Result};
+use anyhow::{bail, Result};
 
 use crate::{measure, CustomDisplay};
 #[cfg(test)]

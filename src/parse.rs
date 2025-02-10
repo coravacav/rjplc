@@ -1,6 +1,6 @@
 use std::{fmt::Write, path::Path};
 
-use color_eyre::eyre::{bail, Result};
+use anyhow::{bail, Result};
 use parser::{
     check, consume, consume_list, consume_list_impl, localize_error, miss, Consume, ParseResult,
     Parser, StaticParserData,
@@ -539,32 +539,26 @@ impl<'a, 'b> Consume<'a, 'b> for Type {
             ),
         };
 
-        #[allow(clippy::while_let_loop)]
-        loop {
-            match (parser.first_type(data), &ty) {
-                (TokenType::LSQUARE, _) => {
-                    parser = parser.skip_one();
+        while let (TokenType::LSQUARE, _) = (parser.first_type(data), &ty) {
+            parser = parser.skip_one();
 
-                    let mut depth: u8 = 1;
+            let mut depth: u8 = 1;
 
-                    loop {
-                        match parser.next_type(data) {
-                            (advanced_parser, TokenType::RSQUARE) => {
-                                parser = advanced_parser;
-                                break;
-                            }
-                            (advanced_parser, TokenType::COMMA) => {
-                                parser = advanced_parser;
-                                depth += 1;
-                            }
-                            (_, t) => miss!(parser, "expected RSQUARE or COMMA, found {t:?}"),
-                        }
+            loop {
+                match parser.next_type(data) {
+                    (advanced_parser, TokenType::RSQUARE) => {
+                        parser = advanced_parser;
+                        break;
                     }
-
-                    ty = Self::Array(Box::new(ty), depth);
+                    (advanced_parser, TokenType::COMMA) => {
+                        parser = advanced_parser;
+                        depth += 1;
+                    }
+                    (_, t) => miss!(parser, "expected RSQUARE or COMMA, found {t:?}"),
                 }
-                _ => break,
-            };
+            }
+
+            ty = Self::Array(Box::new(ty), depth);
         }
 
         parser.complete(ty)
