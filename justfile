@@ -31,6 +31,6 @@ cr: cargo-build-release
 cargo-build-release:
     cargo build --release
 
-crd: cargo-build-release-debug
-cargo-build-release-debug:
-    CARGO_PROFILE_RELEASE_DEBUG=true just cargo-build-release
+build-debug:
+    CARGO_PROFILE_RELEASE_DEBUG=true cargo build --release
+    codesign -s "Stefan Todorov" -f --timestamp --options=runtime --entitlements ent.plist target/release/rjplc
