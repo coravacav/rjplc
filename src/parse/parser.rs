@@ -23,6 +23,30 @@ pub(crate) enum ParseResult<'a, T> {
     Parsed(Parser, T),
 }
 
+impl<'a, T> ParseResult<'a, T> {
+    pub fn erase<O>(self) -> ParseResult<'a, O> {
+        match self {
+            ParseResult::NotParsedErrorPrinted {
+                error_message,
+                line,
+                column,
+            } => ParseResult::NotParsedErrorPrinted {
+                error_message,
+                line,
+                column,
+            },
+            ParseResult::NotParsed {
+                error_message,
+                position,
+            } => ParseResult::NotParsed {
+                error_message,
+                position,
+            },
+            ParseResult::Parsed(..) => panic!(),
+        }
+    }
+}
+
 macro_rules! miss {
     ($parser:ident, $($msg:tt)*) => {
         return $parser.miss(Box::new(move || format!($($msg)*)))
@@ -36,26 +60,7 @@ macro_rules! consume {
                 debug_assert_ne!($parser.current_position, parser.current_position);
                 (parser, t)
             }
-            ParseResult::NotParsed {
-                error_message,
-                position,
-            } => {
-                return ParseResult::NotParsed {
-                    error_message,
-                    position,
-                }
-            }
-            ParseResult::NotParsedErrorPrinted {
-                error_message,
-                line,
-                column,
-            } => {
-                return ParseResult::NotParsedErrorPrinted {
-                    error_message,
-                    line,
-                    column,
-                }
-            }
+            pr => return pr.erase(),
         };
 
         $parser = advanced_parser;
@@ -81,8 +86,7 @@ pub fn consume_list_impl<'a, 'b, T: Consume<'a, 'b> + std::fmt::Debug>(
         match parser.first(data) {
             t if t.get_type() == delimeter => parser = parser.skip_one(),
             t if !delimeter_terminated && t.get_type() == end_token => {
-                parser = parser.skip_one();
-                return parser.complete(list);
+                return parser.skip_one().complete(list)
             }
             t if delimeter_terminated => miss!(parser, "expected {delimeter:?}, found {t:?}"),
             t => miss!(
@@ -106,26 +110,7 @@ macro_rules! consume_list {
                 debug_assert_ne!($parser.current_position, parser.current_position);
                 (parser, t)
             }
-            ParseResult::NotParsed {
-                error_message,
-                position,
-            } => {
-                return ParseResult::NotParsed {
-                    error_message,
-                    position,
-                }
-            }
-            ParseResult::NotParsedErrorPrinted {
-                error_message,
-                line,
-                column,
-            } => {
-                return ParseResult::NotParsedErrorPrinted {
-                    error_message,
-                    line,
-                    column,
-                }
-            }
+            pr => return pr.erase(),
         };
 
         $parser = advanced_parser;
@@ -142,26 +127,7 @@ macro_rules! check {
     ($parser:ident, $data:ident, $token:tt) => {
         let advanced_parser = match $parser.check_skip($data, TokenType::$token) {
             ParseResult::Parsed(parser, _) => (parser),
-            ParseResult::NotParsed {
-                error_message,
-                position,
-            } => {
-                return ParseResult::NotParsed {
-                    error_message,
-                    position,
-                }
-            }
-            ParseResult::NotParsedErrorPrinted {
-                error_message,
-                line,
-                column,
-            } => {
-                return ParseResult::NotParsedErrorPrinted {
-                    error_message,
-                    line,
-                    column,
-                }
-            }
+            pr => return pr.erase(),
         };
 
         $parser = advanced_parser;
