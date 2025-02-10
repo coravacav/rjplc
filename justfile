@@ -18,6 +18,10 @@ bench-t-l:
 bench-t-p:
     just cr
     hyperfine 'target/release/rjplc -p t.jpl > /dev/null' --warmup 25
+    
+bench-t-t:
+    just cr
+    hyperfine 'target/release/rjplc -t t.jpl > /dev/null' --warmup 25
 
 bench-t-l-q:
     just cr
@@ -26,6 +30,10 @@ bench-t-l-q:
 bench-t-p-q:
     just cr
     hyperfine 'target/release/rjplc -pq t.jpl' --warmup 25
+
+bench-t-t-q:
+    just cr
+    hyperfine 'target/release/rjplc -tq t.jpl' --warmup 25
 
 cr: cargo-build-release
 cargo-build-release:
