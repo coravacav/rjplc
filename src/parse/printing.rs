@@ -7,14 +7,28 @@ use super::{
 use crate::{CustomDisplay, PRINT_TYPES};
 
 trait PrintJoined {
-    fn print_joined(&self, f: &mut String, string_map: &[&str], sep: &str) -> std::fmt::Result;
+    fn print_joined(
+        &self,
+        f: &mut String,
+        string_map: &[&str],
+        prefix_if_non_empty: bool,
+    ) -> std::fmt::Result;
 }
 
 impl<T: CustomDisplay> PrintJoined for [T] {
-    fn print_joined(&self, f: &mut String, string_map: &[&str], sep: &str) -> std::fmt::Result {
+    fn print_joined(
+        &self,
+        f: &mut String,
+        string_map: &[&str],
+        prefix_if_non_empty: bool,
+    ) -> std::fmt::Result {
+        if prefix_if_non_empty && !self.is_empty() {
+            f.write_str(" ")?;
+        }
+
         for (i, t) in self.iter().enumerate() {
             if i != 0 {
-                f.write_str(sep)?;
+                f.write_str(" ")?;
             }
             t.fmt(f, string_map)?;
         }
@@ -49,71 +63,62 @@ impl CustomDisplay for Field {
         self.1.fmt(f, string_map)
     }
 }
+
+/// Necessary? No. Fun? Yes.
+macro_rules! disp_help {
+    ($f:ident, $string_map:ident, $($x:tt $y:tt),+) => {{
+        $(disp_help!(@ $f, $string_map, $x $y);)+
+        Ok(())
+    }};
+    (@ $f:ident, $string_map:ident, str $string:literal) => {
+        $f.write_str($string)?;
+    };
+    (@ $f:ident, $string_map:ident, char $char:literal) => {
+        $f.write_char($char)?;
+    };
+    (@ $f:ident, $string_map:ident, fmt $val:ident) => {
+        $val.fmt($f, $string_map)?;
+    };
+    (@ $f:ident, $string_map:ident, type $val:ident) => {
+        $val.fmt_if($f, $string_map)?;
+    };
+    (@ $f:ident, $string_map:ident, joined $val:ident) => {
+        $val.print_joined($f, $string_map, true)?;
+    };
+    (@ $f:ident, $string_map:ident, joinedns $val:ident) => {
+        $val.print_joined($f, $string_map, false)?;
+    };
+}
+
 impl CustomDisplay for Cmd {
     fn fmt(&self, f: &mut String, string_map: &[&str]) -> std::fmt::Result {
         match self {
             Cmd::Read(file, lvalue) => {
-                f.write_str("(ReadCmd ")?;
-                file.fmt(f, string_map)?;
-                f.write_char(' ')?;
-                lvalue.fmt(f, string_map)?;
-                f.write_char(')')
+                disp_help!(f, string_map, str "(ReadCmd ", fmt file, char ' ', fmt lvalue, char ')')
             }
             Cmd::Write(expr, file) => {
-                f.write_str("(WriteCmd ")?;
-                expr.fmt(f, string_map)?;
-                f.write_char(' ')?;
-                file.fmt(f, string_map)?;
-                f.write_char(')')
+                disp_help!(f, string_map, str "(WriteCmd ", fmt expr, char ' ', fmt file, char ')')
             }
             Cmd::Let(lvalue, expr) => {
-                f.write_str("(LetCmd ")?;
-                lvalue.fmt(f, string_map)?;
-                f.write_char(' ')?;
-                expr.fmt(f, string_map)?;
-                f.write_char(')')
+                disp_help!(f, string_map, str "(LetCmd ", fmt lvalue, char ' ', fmt expr, char ')')
             }
             Cmd::Assert(expr, msg) => {
-                f.write_str("(AssertCmd ")?;
-                expr.fmt(f, string_map)?;
-                f.write_char(' ')?;
-                msg.fmt(f, string_map)?;
-                f.write_char(')')
+                disp_help!(f, string_map, str "(AssertCmd ", fmt expr, char ' ', fmt msg, char ')')
             }
             Cmd::Print(msg) => {
-                f.write_str("(PrintCmd ")?;
-                msg.fmt(f, string_map)?;
-                f.write_char(')')
+                disp_help!(f, string_map, str "(PrintCmd ", fmt msg, char ')')
             }
             Cmd::Show(expr) => {
-                f.write_str("(ShowCmd ")?;
-                expr.fmt(f, string_map)?;
-                f.write_char(')')
+                disp_help!(f, string_map, str "(ShowCmd ", fmt expr, char ')')
             }
             Cmd::Time(cmd) => {
-                f.write_str("(TimeCmd ")?;
-                cmd.fmt(f, string_map)?;
-                f.write_char(')')
+                disp_help!(f, string_map, str "(TimeCmd ", fmt cmd, char ')')
             }
             Cmd::Fn(name, bindings, ty, statements) => {
-                f.write_str("(FnCmd ")?;
-                name.fmt(f, string_map)?;
-                f.write_str(" ((")?;
-                bindings.print_joined(f, string_map, " ")?;
-                f.write_str(")) ")?;
-                ty.fmt(f, string_map)?;
-                f.write_char(' ')?;
-                statements.print_joined(f, string_map, " ")?;
-                f.write_char(')')
+                disp_help!(f, string_map, str "(FnCmd ", fmt name, str " ((", joinedns bindings, str ")) ", fmt ty, char ' ', joinedns statements, char ')')
             }
             Cmd::Struct(name, fields) => {
-                f.write_str("(StructCmd ")?;
-                name.fmt(f, string_map)?;
-                if !fields.is_empty() {
-                    f.write_char(' ')?;
-                    fields.print_joined(f, string_map, " ")?;
-                }
-                f.write_char(')')
+                disp_help!(f, string_map, str "(StructCmd ", fmt name, joined fields, char ')')
             }
         }
     }
@@ -122,23 +127,13 @@ impl CustomDisplay for Statement {
     fn fmt(&self, f: &mut String, string_map: &[&str]) -> std::fmt::Result {
         match self {
             Statement::Let(lvalue, expr) => {
-                f.write_str("(LetStmt ")?;
-                lvalue.fmt(f, string_map)?;
-                f.write_char(' ')?;
-                expr.fmt(f, string_map)?;
-                f.write_char(')')
+                disp_help!(f, string_map, str "(LetStmt ", fmt lvalue, char ' ', fmt expr, char ')')
             }
             Statement::Assert(expr, msg) => {
-                f.write_str("(AssertStmt ")?;
-                expr.fmt(f, string_map)?;
-                f.write_char(' ')?;
-                msg.fmt(f, string_map)?;
-                f.write_char(')')
+                disp_help!(f, string_map, str "(AssertStmt ", fmt expr, char ' ', fmt msg, char ')')
             }
             Statement::Return(expr) => {
-                f.write_str("(ReturnStmt ")?;
-                expr.fmt(f, string_map)?;
-                f.write_char(')')
+                disp_help!(f, string_map, str "(ReturnStmt ", fmt expr, char ')')
             }
         }
     }
@@ -228,10 +223,7 @@ impl CustomDisplay for Expr {
                 }
             }
             Expr::Variable(s, ty) => {
-                f.write_str("(VarExpr ")?;
-                ty.fmt_if(f, string_map)?;
-                s.fmt(f, string_map)?;
-                f.write_char(')')
+                disp_help!(f, string_map, str "(VarExpr ", type ty, fmt s, char ')')
             }
             Expr::Paren(expr) => expr.fmt(f, string_map),
             Expr::ArrayLiteral(exprs, ty) => {
@@ -240,81 +232,36 @@ impl CustomDisplay for Expr {
                 } else {
                     f.write_str("(ArrayLiteralExpr ")?;
                     ty.fmt_if(f, string_map)?;
-                    exprs.print_joined(f, string_map, " ")?;
+                    exprs.print_joined(f, string_map, false)?;
                     f.write_char(')')
                 }
             }
             Expr::ArrayIndex(s, exprs, ty) => {
-                f.write_str("(ArrayIndexExpr ")?;
-                ty.fmt_if(f, string_map)?;
-                s.fmt(f, string_map)?;
-                if !exprs.is_empty() {
-                    f.write_char(' ')?;
-                    exprs.print_joined(f, string_map, " ")?;
-                }
-                write!(f, ")")
+                disp_help!(f, string_map, str "(ArrayIndexExpr ", type ty, fmt s, joined exprs, char ')')
             }
             Expr::Binop(expr, op, expr2, ty) => {
-                f.write_str("(BinopExpr ")?;
-                ty.fmt_if(f, string_map)?;
-                expr.fmt(f, string_map)?;
-                f.write_char(' ')?;
-                op.fmt(f, string_map)?;
-                f.write_char(' ')?;
-                expr2.fmt(f, string_map)?;
-                f.write_char(')')
+                disp_help!(f, string_map, str "(BinopExpr ", type ty, fmt expr, char ' ', fmt op, char ' ', fmt expr2, char ')')
             }
             Expr::Call(expr, exprs, ty) => {
-                f.write_str("(CallExpr ")?;
-                ty.fmt_if(f, string_map)?;
-                expr.fmt(f, string_map)?;
-                if !exprs.is_empty() {
-                    f.write_char(' ')?;
-                    exprs.print_joined(f, string_map, " ")?;
-                }
-                write!(f, ")")
+                disp_help!(f, string_map, str "(CallExpr ", type ty, fmt expr, joined exprs, char ')')
             }
             Expr::StructLiteral(s, exprs, ty) => {
-                f.write_str("(StructLiteralExpr ")?;
-                ty.fmt_if(f, string_map)?;
-                s.fmt(f, string_map)?;
-                if !exprs.is_empty() {
-                    f.write_char(' ')?;
-                    exprs.print_joined(f, string_map, " ")?;
-                }
-                write!(f, ")")
+                disp_help!(f, string_map, str "(StructLiteralExpr ", type ty, fmt s, joined exprs, char ')')
             }
             Expr::Dot(expr, s, ty) => {
-                f.write_str("(DotExpr ")?;
-                ty.fmt_if(f, string_map)?;
-                expr.fmt(f, string_map)?;
-                f.write_char(' ')?;
-                s.fmt(f, string_map)?;
-                write!(f, ")")
+                disp_help!(f, string_map, str "(DotExpr ", type ty, fmt expr, char ' ', fmt s, char ')')
             }
             Expr::Unop(op, expr, ty) => {
-                f.write_str("(UnopExpr ")?;
-                ty.fmt_if(f, string_map)?;
-                op.fmt(f, string_map)?;
-                f.write_char(' ')?;
-                expr.fmt(f, string_map)?;
-                write!(f, ")")
+                disp_help!(f, string_map, str "(UnopExpr ", type ty, fmt op, char ' ', fmt expr, char ')')
             }
             Expr::If(expr, expr2, expr3, ty) => {
-                f.write_str("(IfExpr ")?;
-                ty.fmt_if(f, string_map)?;
-                expr.fmt(f, string_map)?;
-                f.write_char(' ')?;
-                expr2.fmt(f, string_map)?;
-                f.write_char(' ')?;
-                expr3.fmt(f, string_map)?;
-                write!(f, ")")
+                disp_help!(f, string_map, str "(IfExpr ", type ty, fmt expr, char ' ', fmt expr2, char ' ', fmt expr3, char ')')
             }
             Expr::ArrayLoop(fields, expr, ty) => {
                 f.write_str("(ArrayLoopExpr ")?;
                 ty.fmt_if(f, string_map)?;
                 if !fields.is_empty() {
-                    fields.print_joined(f, string_map, " ")?;
+                    fields.print_joined(f, string_map, false)?;
                     f.write_char(' ')?;
                 }
                 expr.fmt(f, string_map)?;
@@ -324,7 +271,7 @@ impl CustomDisplay for Expr {
                 f.write_str("(SumLoopExpr ")?;
                 ty.fmt_if(f, string_map)?;
                 if !fields.is_empty() {
-                    fields.print_joined(f, string_map, " ")?;
+                    fields.print_joined(f, string_map, false)?;
                     f.write_char(' ')?;
                 }
                 expr.fmt(f, string_map)?;
@@ -336,17 +283,9 @@ impl CustomDisplay for Expr {
 impl CustomDisplay for LValue {
     fn fmt(&self, f: &mut String, string_map: &[&str]) -> std::fmt::Result {
         match self {
-            LValue::Var(s) => {
-                f.write_str("(VarLValue ")?;
-                s.fmt(f, string_map)?;
-                write!(f, ")")
-            }
+            LValue::Var(s) => disp_help!(f, string_map, str "(VarLValue ", fmt s, char ')'),
             LValue::Array(s, args) => {
-                f.write_str("(ArrayLValue ")?;
-                s.fmt(f, string_map)?;
-                f.write_char(' ')?;
-                args.print_joined(f, string_map, " ")?;
-                write!(f, ")")
+                disp_help!(f, string_map, str "(ArrayLValue ", fmt s, char ' ', joinedns args, char ')')
             }
         }
     }
@@ -357,7 +296,6 @@ impl CustomDisplay for Type {
             Type::Struct(s) => {
                 f.write_str("(StructType ")?;
                 f.write_str(string_map[*s])?;
-                // s.fmt(f, string_map)?; Based on TODO above.
                 f.write_char(')')
             }
             Type::Array(s, i) => {
@@ -371,11 +309,7 @@ impl CustomDisplay for Type {
             Type::Int => f.write_str("(IntType)"),
             Type::Bool => f.write_str("(BoolType)"),
             Type::Void => f.write_str("(VoidType)"),
-            Type::Tuple(tys) => {
-                f.write_str("(TupleType ")?;
-                tys.print_joined(f, string_map, " ")?;
-                f.write_char(')')
-            }
+            Type::Tuple(tys) => disp_help!(f, string_map, str "(TupleType ", joined tys, char ')'),
             Type::None => Ok(()),
         }
     }
@@ -394,8 +328,7 @@ impl Type {
 
 impl CustomDisplay for Binding {
     fn fmt(&self, f: &mut String, string_map: &[&str]) -> std::fmt::Result {
-        self.0.fmt(f, string_map)?;
-        f.write_char(' ')?;
-        self.1.fmt(f, string_map)
+        let Binding(l, r) = self;
+        disp_help!(f, string_map, fmt l, char ' ', fmt r)
     }
 }

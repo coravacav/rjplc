@@ -267,9 +267,9 @@ impl Expr {
         match self {
             Expr::Int(_, _) => Type::Int,
             Expr::Float(_, _) => Type::Float,
-            Expr::True | Expr::False | Expr::Binop(_, Op(TokenType::Eq), _, _) => Type::Bool,
-            Expr::Paren(expr) => expr.get_type(),
             Expr::Void => Type::Void,
+            Expr::True | Expr::False => Type::Bool,
+            Expr::Paren(expr) => expr.get_type(),
             Expr::ArrayLiteral(_, ty)
             | Expr::StructLiteral(_, _, ty)
             | Expr::ArrayLoop(_, _, ty)
