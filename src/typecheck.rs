@@ -341,9 +341,7 @@ impl TypeFill for Cmd {
                     }
                 }
             }
-            Cmd::Time(cmd) => {
-                cmd.typefill(context, string_map)?;
-            }
+            Cmd::Time(cmd) => cmd.typefill(context, string_map)?,
             Cmd::Assert(expr, _) => {
                 expr.typefill(context, string_map)?;
                 let expr_type = expr.get_type();
