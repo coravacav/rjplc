@@ -644,8 +644,6 @@ impl TypeFill for Expr {
                     context.vars.remove(lv);
                 }
             }
-
-            _ => todo!("{self:#?}"),
         }
 
         Ok(())

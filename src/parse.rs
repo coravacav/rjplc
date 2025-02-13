@@ -237,12 +237,10 @@ pub enum Expr {
     Void,
     Variable(Variable, Type),
     ArrayLiteral(Vec<Expr>, Type),
-    TupleLiteral(Vec<Expr>),
     Paren(Box<Expr>),
     ArrayIndex(Box<Expr>, Vec<Expr>, Type),
     Binop(Box<Expr>, Op, Box<Expr>, Type),
     Call(Variable, Vec<Expr>, Type),
-    TupleIndex(Box<Expr>, Vec<Expr>),
     StructLiteral(Variable, Vec<Expr>, Type),
     Dot(Box<Expr>, Variable, Type),
     Unop(Op, Box<Expr>, Type),
@@ -256,7 +254,7 @@ impl Expr {
 
     const fn precedence(&self) -> u8 {
         match self {
-            Expr::TupleIndex(_, _) | Expr::ArrayIndex(_, _, _) => 7,
+            Expr::ArrayIndex(_, _, _) => 7,
             Expr::Unop(_, _, _) => Self::UNOP_PRECEDENCE,
             Expr::Binop(_, op, _, _) => op.precedence(),
             Expr::If(_, _, _, _) | Expr::ArrayLoop(_, _, _) | Expr::SumLoop(_, _, _) => 1,
@@ -283,8 +281,6 @@ impl Expr {
             | Expr::Call(_, _, ty)
             | Expr::If(_, _, _, ty)
             | Expr::ArrayIndex(_, _, ty) => ty.clone(),
-            // Expr::Binop(_, Op(TokenType::Eq), _, _) => Type::Bool,
-            _ => todo!("get type of {self:?}"),
         }
     }
 }
@@ -358,10 +354,6 @@ impl<'a, 'b> Consume<'a, 'b> for Expr {
                 check!(parser, data, RPAREN);
                 (parser, Expr::Paren(Box::new(expr)))
             }
-            (mut parser, TokenType::LCURLY) => {
-                consume_list!(parser, data, RCURLY, exprs);
-                (parser, Expr::TupleLiteral(exprs))
-            }
             (mut parser, TokenType::IF) => {
                 consume!(parser, data, Expr, expr);
                 check!(parser, data, THEN);
@@ -400,10 +392,6 @@ impl<'a, 'b> Consume<'a, 'b> for Expr {
                 ((mut parser, TokenType::LCURLY), Expr::Variable(s, _)) => {
                     consume_list!(parser, data, RCURLY, exprs);
                     (parser, Expr::StructLiteral(*s, exprs, Type::None))
-                }
-                ((mut parser, TokenType::LCURLY), _) => {
-                    consume_list!(parser, data, RCURLY, exprs);
-                    (parser, Expr::TupleIndex(Box::new(expr), exprs))
                 }
                 ((mut parser, TokenType::DOT), _) => {
                     consume!(parser, data, Variable, var);

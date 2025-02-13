@@ -244,11 +244,6 @@ impl CustomDisplay for Expr {
                     f.write_char(')')
                 }
             }
-            Expr::TupleLiteral(exprs) => {
-                f.write_str("(TupleLiteralExpr ")?;
-                exprs.print_joined(f, string_map, " ")?;
-                f.write_char(')')
-            }
             Expr::ArrayIndex(s, exprs, ty) => {
                 f.write_str("(ArrayIndexExpr ")?;
                 ty.fmt_if(f, string_map)?;
@@ -258,13 +253,6 @@ impl CustomDisplay for Expr {
                     exprs.print_joined(f, string_map, " ")?;
                 }
                 write!(f, ")")
-            }
-            Expr::TupleIndex(s, exprs) => {
-                f.write_str("(TupleIndexExpr ")?;
-                s.fmt(f, string_map)?;
-                f.write_char(' ')?;
-                exprs.print_joined(f, string_map, " ")?;
-                f.write_char(')')
             }
             Expr::Binop(expr, op, expr2, ty) => {
                 f.write_str("(BinopExpr ")?;
