@@ -507,7 +507,6 @@ pub enum Type {
     Int,
     Bool,
     Void,
-    Tuple(Vec<Type>),
     None,
 }
 
@@ -520,7 +519,6 @@ impl PartialEq for Type {
             | (Type::Int, Type::Int)
             | (Type::Bool, Type::Bool)
             | (Type::Void, Type::Void) => true,
-            (Type::Tuple(s), Type::Tuple(o)) => s.as_ptr() == o.as_ptr(),
             _ => false,
         }
     }
@@ -536,10 +534,6 @@ impl<'a, 'b> Consume<'a, 'b> for Type {
             (parser, TokenType::BOOL) => (parser, Type::Bool),
             (parser, TokenType::VOID) => (parser, Type::Void),
             (parser, TokenType::FLOAT) => (parser, Type::Float),
-            (mut parser, TokenType::LCURLY) => {
-                consume_list!(parser, data, RCURLY, tys);
-                (parser, Type::Tuple(tys))
-            }
             (_, t) => miss!(
                 parser,
                 "expected start of type (VARIABLE | FLOAT | LCURLY), found {t:?}"

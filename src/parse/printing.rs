@@ -309,7 +309,6 @@ impl CustomDisplay for Type {
             Type::Int => f.write_str("(IntType)"),
             Type::Bool => f.write_str("(BoolType)"),
             Type::Void => f.write_str("(VoidType)"),
-            Type::Tuple(tys) => disp_help!(f, string_map, str "(TupleType ", joined tys, char ')'),
             Type::None => Ok(()),
         }
     }

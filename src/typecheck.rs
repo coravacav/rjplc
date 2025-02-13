@@ -164,11 +164,6 @@ impl Context {
                 );
             }
             Type::Array(ty, _) => self.validate_type(ty, string_map)?,
-            Type::Tuple(tys) => {
-                for ty in tys {
-                    self.validate_type(ty, string_map)?;
-                }
-            }
             _ => {}
         }
 
