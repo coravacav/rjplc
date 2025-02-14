@@ -364,20 +364,6 @@ impl TypeFill for Cmd {
     }
 }
 
-/// # Errors
-#[allow(clippy::too_many_lines)]
-pub fn typecheck(cmds: &mut [Cmd], string_map: &[&str]) -> Result<()> {
-    let mut context = Context::new(string_map);
-
-    for cmd in cmds {
-        cmd.typefill(&mut context, string_map)?;
-    }
-
-    PRINT_TYPES.with(|print_types| print_types.set(true));
-
-    Ok(())
-}
-
 #[allow(clippy::too_many_lines)]
 impl TypeFill for Expr {
     fn typefill(&mut self, context: &mut Context, string_map: &[&str]) -> Result<()> {
@@ -647,4 +633,17 @@ impl TypeFill for Expr {
 
         Ok(())
     }
+}
+
+/// # Errors
+pub fn typecheck(cmds: &mut [Cmd], string_map: &[&str], tokens_consumed: &[usize]) -> Result<()> {
+    let mut context = Context::new(string_map);
+
+    for (i, cmd) in cmds.iter_mut().enumerate() {
+        cmd.typefill(&mut context, string_map).inspect_err(|_| {})?;
+    }
+
+    PRINT_TYPES.with(|print_types| print_types.set(true));
+
+    Ok(())
 }

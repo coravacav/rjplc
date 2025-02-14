@@ -10,17 +10,12 @@ fn test_parse_correct() {
     let tester = |file: &str, solution_file: &str| {
         let (tokens, string_map) = crate::lex::lex(file).expect("Lexing should work");
 
-        let parsed = match parse(&tokens, &string_map, file, Path::new("")) {
-            Ok(parsed) => parsed,
-            Err(e) => {
-                panic!("Compilation failed {e}");
-            }
-        };
+        let (cmds, _) = parse(&tokens, &string_map, file, Path::new("")).unwrap();
 
         let mut output = String::new();
 
-        for parsed in parsed {
-            parsed.fmt(&mut output, &string_map).unwrap();
+        for cmd in cmds {
+            cmd.fmt(&mut output, &string_map).unwrap();
             output.push('\n');
         }
 

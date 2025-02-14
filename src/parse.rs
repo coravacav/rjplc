@@ -16,7 +16,7 @@ mod printing;
 #[cfg(test)]
 mod tests;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Variable(pub usize);
 
 impl<'a, 'b> Consume<'a, 'b> for Variable {
@@ -590,9 +590,10 @@ pub fn parse<'a>(
     string_map: &'a [&'a str],
     source: &'a str,
     path: &'a Path,
-) -> Result<Vec<Cmd>> {
+) -> Result<(Vec<Cmd>, Vec<usize>)> {
     measure!("parse");
     let mut cmds = vec![];
+    let mut tokens_consumed = vec![];
 
     let mut parser = Parser {
         current_position: 0,
@@ -613,6 +614,8 @@ pub fn parse<'a>(
             ParseResult::Parsed(moved_parser, cmd) => {
                 // debug_assert_ne!(moved_parser, parser);
                 parser = moved_parser;
+
+                tokens_consumed.push(parser.current_position);
 
                 let cmd: Cmd = cmd;
 
@@ -652,5 +655,7 @@ pub fn parse<'a>(
         }
     }
 
-    Ok(cmds)
+    debug_assert_eq!(cmds.len(), tokens_consumed.len());
+
+    Ok((cmds, tokens_consumed))
 }

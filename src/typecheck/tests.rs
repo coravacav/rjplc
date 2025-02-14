@@ -10,14 +10,9 @@ fn test_parse_correct() {
     let tester = |file: &str, solution_file: &str| {
         let (tokens, string_map) = crate::lex::lex(file).expect("Lexing should work");
 
-        let mut cmds = match parse(&tokens, &string_map, file, Path::new("")) {
-            Ok(cmds) => cmds,
-            Err(e) => {
-                panic!("Compilation failed {e}");
-            }
-        };
+        let (mut cmds, tokens_consumed) = parse(&tokens, &string_map, file, Path::new("")).unwrap();
 
-        if let Err(e) = typecheck(&mut cmds, &string_map) {
+        if let Err(e) = typecheck(&mut cmds, &string_map, &tokens_consumed) {
             panic!("Typechecking failed {e}");
         }
 
@@ -51,11 +46,11 @@ fn test_parse_fails() {
             return;
         };
 
-        let Ok(mut cmds) = parse(&tokens, &string_map, file, file_path) else {
+        let Ok((mut cmds, tokens_consumed)) = parse(&tokens, &string_map, file, file_path) else {
             return;
         };
 
-        match typecheck(&mut cmds, &string_map) {
+        match typecheck(&mut cmds, &string_map, &tokens_consumed) {
             Ok(()) => {
                 panic!("expected typecheck to fail");
             }

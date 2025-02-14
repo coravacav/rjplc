@@ -2,14 +2,19 @@
 
 use std::{io::stdout, path::PathBuf, process::exit};
 
-use clap::Parser;
+use clap::{ArgGroup, Parser};
 use measure::print_timings;
 use rjplc::{lex, measure, parse, typecheck, CustomDisplay};
 
-#[derive(Parser)]
+#[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 #[allow(clippy::struct_excessive_bools)]
-struct Cli {
+#[clap(group(
+    ArgGroup::new("required_args")
+        .required(true)
+        .args(&["lex", "parse", "typecheck"])
+))]
+struct Args {
     /// Filename
     path: PathBuf,
 
@@ -24,194 +29,81 @@ struct Cli {
 
     #[arg(short)]
     quiet: bool,
-
-    /// A flag to repeat each operation 100 times to help for accurate measurements
-    #[cfg(feature = "measure")]
-    #[arg(short, long, action = clap::ArgAction::Count)]
-    measure_repeat: u8,
 }
 
 #[allow(clippy::too_many_lines)]
 fn main() {
     #[allow(unused_mut)]
-    let Cli {
-        path,
-        mut lex,
-        mut parse,
-        mut typecheck,
-        quiet,
-        #[cfg(feature = "measure")]
-        measure_repeat,
-    } = Cli::parse();
+    let args = Args::parse();
 
-    #[cfg(feature = "measure")]
-    let reps = if measure_repeat > 0 {
-        let reps = 10u128.pow(measure_repeat as u32);
-        measure::set_measure_iterations(reps);
-        reps - 1 // To make the division accurate.
-    } else {
-        0
-    };
+    let file = unwrap_or_exit(std::fs::read_to_string(&args.path));
 
-    if typecheck {
-        parse = true;
+    let (tokens, string_map) = unwrap_or_exit(lex::lex(&file));
+
+    if !args.parse && !args.typecheck {
+        print_output(args.quiet, &tokens, &string_map, true);
     }
 
-    if parse {
-        lex = true;
+    let (mut cmds, tokens_consumed) =
+        unwrap_or_exit(parse::parse(&tokens, &string_map, &file, &args.path));
+
+    if args.typecheck {
+        unwrap_or_exit(typecheck::typecheck(
+            &mut cmds,
+            &string_map,
+            &tokens_consumed,
+        ));
     }
 
-    let file = match std::fs::read_to_string(&path) {
-        Ok(file) => file,
-        Err(e) => {
-            println!("Compilation failed {e}");
-            return;
-        }
-    };
+    print_output(args.quiet, &cmds, &string_map, true);
+}
 
-    if !lex {
-        println!("Compilation failed, nothing done");
-        return;
+fn generate_output<T: CustomDisplay>(
+    items: &[T],
+    string_map: &[&str],
+    add_compilation_succeeded: bool,
+) -> String {
+    measure!("out");
+    use std::fmt::Write;
+    let mut output = String::new();
+
+    for item in items {
+        item.fmt(&mut output, string_map).unwrap();
+        output.push('\n');
     }
 
-    let (tokens, string_map) = match lex::lex(&file) {
-        Ok(tokens) => tokens,
-        #[allow(unused_variables)]
-        Err(e) => {
-            #[cfg(feature = "homework")]
-            println!("Compilation failed");
-            #[cfg(not(feature = "homework"))]
-            println!("Compilation failed {e}");
-
-            print_timings();
-
-            return;
-        }
-    };
-
-    #[cfg(feature = "measure")]
-    if measure_repeat > 0 {
-        for _ in 0..reps {
-            let _ = std::hint::black_box(lex::lex(&file));
-        }
+    if add_compilation_succeeded {
+        writeln!(output, "Compilation succeeded").unwrap();
     }
 
-    if !parse {
-        if !quiet {
-            use std::io::Write;
+    output
+}
 
-            let output = {
-                measure!("out");
-                use std::fmt::Write;
-                let mut output = String::new();
-
-                for token in &tokens {
-                    token.fmt(&mut output, &string_map).unwrap();
-                    output.push('\n');
-                }
-                writeln!(output, "Compilation succeeded").unwrap();
-
-                output
-            };
-
-            measure!("write output");
-            stdout().write_all(output.as_bytes()).unwrap();
-        }
-
-        print_timings();
-
-        exit(0);
-    }
-
-    let mut cmds = match parse::parse(&tokens, &string_map, &file, &path) {
-        Ok(cmds) => cmds,
-        #[allow(unused_variables)]
-        Err(e) => {
-            #[cfg(feature = "homework")]
-            println!("Compilation failed");
-            #[cfg(not(feature = "homework"))]
-            println!("Compilation failed {e}");
-
-            print_timings();
-
-            return;
-        }
-    };
-
-    #[cfg(feature = "measure")]
-    if measure_repeat > 0 {
-        for _ in 0..reps {
-            let _ = std::hint::black_box(parse::parse(&tokens, &string_map, &file, &path));
-        }
-    }
-
-    if !typecheck {
-        if !quiet {
-            use std::io::Write;
-
-            let output = {
-                measure!("out");
-                use std::fmt::Write;
-                let mut output = String::new();
-
-                for cmd in &cmds {
-                    cmd.fmt(&mut output, &string_map).unwrap();
-                    output.push('\n');
-                }
-                writeln!(output, "Compilation succeeded").unwrap();
-
-                output
-            };
-
-            measure!("write output");
-            stdout().write_all(output.as_bytes()).unwrap();
-        }
-
-        print_timings();
-
-        exit(0);
-    }
-
-    if let Err(e) = typecheck::typecheck(&mut cmds, &string_map) {
-        #[cfg(feature = "homework")]
-        println!("Compilation failed");
-        #[cfg(not(feature = "homework"))]
-        println!("Compilation failed {e}");
-
-        print_timings();
-
-        return;
-    };
-
-    #[cfg(feature = "measure")]
-    if measure_repeat > 0 {
-        for _ in 0..reps {
-            let _ = std::hint::black_box(typecheck::typecheck(&parsed));
-        }
-    }
+fn print_output<T: CustomDisplay>(
+    quiet: bool,
+    items: &[T],
+    string_map: &[&str],
+    add_compilation_succeeded: bool,
+) {
+    use std::io::Write;
 
     if !quiet {
-        use std::io::Write;
-
-        let output = {
-            measure!("out");
-            use std::fmt::Write;
-            let mut output = String::new();
-
-            for cmd in &cmds {
-                cmd.fmt(&mut output, &string_map).unwrap();
-                output.push('\n');
-            }
-            writeln!(output, "Compilation succeeded").unwrap();
-
-            output
-        };
-
-        measure!("write output");
+        let output = generate_output(items, string_map, add_compilation_succeeded);
         stdout().write_all(output.as_bytes()).unwrap();
     }
+}
 
-    print_timings();
+fn unwrap_or_exit<T, E: std::fmt::Display>(result: std::result::Result<T, E>) -> T {
+    match result {
+        Ok(t) => t,
+        Err(e) => {
+            #[cfg(feature = "homework")]
+            println!("Compilation failed");
+            #[cfg(not(feature = "homework"))]
+            println!("Compilation failed {e}");
 
-    exit(0);
+            print_timings();
+            exit(1);
+        }
+    }
 }
