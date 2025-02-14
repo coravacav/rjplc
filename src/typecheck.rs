@@ -183,8 +183,14 @@ impl TypeFill for Cmd {
                 expr.typefill(context, string_map)?;
             }
             Cmd::Struct(Variable(v), fields) => {
-                for Field(_, ty) in fields.iter_mut() {
+                let mut name_check = Vec::with_capacity(fields.len());
+
+                for Field(name, ty) in fields.iter_mut() {
                     context.validate_type(ty, string_map)?;
+                    if name_check.contains(name) {
+                        bail!("duplicate field identifier {}", string_map[*v]);
+                    }
+                    name_check.push(*name);
                 }
 
                 context.insert_struct(*v, fields.clone(), string_map)?;
