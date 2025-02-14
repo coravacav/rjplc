@@ -1,9 +1,4 @@
-use std::{
-    cell::{Cell, RefCell},
-    collections::HashMap,
-    str::FromStr,
-    time::Instant,
-};
+use std::{cell::RefCell, collections::HashMap, str::FromStr, time::Instant};
 
 thread_local! {
     pub static SUM_TIMINGS_MAP: RefCell<HashMap<&'static str, u128>> = RefCell::new(HashMap::new());

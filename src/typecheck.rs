@@ -1,3 +1,5 @@
+use std::cmp::Ordering;
+
 use ahash::AHashMap;
 use anyhow::{bail, ensure, Result};
 
@@ -11,18 +13,22 @@ use crate::{
 mod tests;
 
 #[derive(Debug)]
-struct Context {
+struct Ctx<'a, 'b> {
     structs: AHashMap<usize, Vec<Field>>,
     fns: AHashMap<usize, (Vec<Type>, Type)>,
     vars: AHashMap<usize, Type>,
+    temporary_vars: AHashMap<usize, Type>,
+    string_map: &'b [&'a str],
 }
 
-impl Context {
-    fn new(string_map: &[&str]) -> Context {
-        let mut context = Context {
+impl<'a, 'b> Ctx<'a, 'b> {
+    fn new(string_map: &'b [&'a str]) -> Ctx<'a, 'b> {
+        let mut ctx = Ctx {
             structs: AHashMap::new(),
             fns: AHashMap::new(),
             vars: AHashMap::new(),
+            temporary_vars: AHashMap::new(),
+            string_map,
         };
 
         debug_assert_eq!(string_map[0], "rgba");
@@ -30,7 +36,7 @@ impl Context {
         debug_assert_eq!(string_map[2], "g");
         debug_assert_eq!(string_map[3], "b");
         debug_assert_eq!(string_map[4], "a");
-        context.structs.insert(
+        ctx.structs.insert(
             0,
             vec![
                 Field(Variable(1), Type::Float),
@@ -40,130 +46,155 @@ impl Context {
             ],
         );
         debug_assert_eq!(string_map[5], "sqrt");
-        context.fns.insert(5, (vec![Type::Float], Type::Float));
+        ctx.fns.insert(5, (vec![Type::Float], Type::Float));
         debug_assert_eq!(string_map[6], "exp");
-        context.fns.insert(6, (vec![Type::Float], Type::Float));
+        ctx.fns.insert(6, (vec![Type::Float], Type::Float));
         debug_assert_eq!(string_map[7], "sin");
-        context.fns.insert(7, (vec![Type::Float], Type::Float));
+        ctx.fns.insert(7, (vec![Type::Float], Type::Float));
         debug_assert_eq!(string_map[8], "cos");
-        context.fns.insert(8, (vec![Type::Float], Type::Float));
+        ctx.fns.insert(8, (vec![Type::Float], Type::Float));
         debug_assert_eq!(string_map[9], "tan");
-        context.fns.insert(9, (vec![Type::Float], Type::Float));
+        ctx.fns.insert(9, (vec![Type::Float], Type::Float));
         debug_assert_eq!(string_map[10], "asin");
-        context.fns.insert(10, (vec![Type::Float], Type::Float));
+        ctx.fns.insert(10, (vec![Type::Float], Type::Float));
         debug_assert_eq!(string_map[11], "acos");
-        context.fns.insert(11, (vec![Type::Float], Type::Float));
+        ctx.fns.insert(11, (vec![Type::Float], Type::Float));
         debug_assert_eq!(string_map[12], "atan");
-        context.fns.insert(12, (vec![Type::Float], Type::Float));
+        ctx.fns.insert(12, (vec![Type::Float], Type::Float));
         debug_assert_eq!(string_map[13], "log");
-        context.fns.insert(13, (vec![Type::Float], Type::Float));
+        ctx.fns.insert(13, (vec![Type::Float], Type::Float));
         debug_assert_eq!(string_map[14], "pow");
-        context
-            .fns
+        ctx.fns
             .insert(14, (vec![Type::Float, Type::Float], Type::Float));
         debug_assert_eq!(string_map[15], "atan2");
-        context
-            .fns
+        ctx.fns
             .insert(15, (vec![Type::Float, Type::Float], Type::Float));
         debug_assert_eq!(string_map[16], "to_float");
-        context.fns.insert(16, (vec![Type::Int], Type::Float));
+        ctx.fns.insert(16, (vec![Type::Int], Type::Float));
         debug_assert_eq!(string_map[17], "to_int");
-        context.fns.insert(17, (vec![Type::Float], Type::Int));
+        ctx.fns.insert(17, (vec![Type::Float], Type::Int));
         debug_assert_eq!(string_map[18], "args");
-        context.vars.insert(18, Type::Array(Box::new(Type::Int), 1));
+        ctx.vars.insert(18, Type::Array(Box::new(Type::Int), 1));
         debug_assert_eq!(string_map[19], "argnum");
-        context.vars.insert(19, Type::Int);
+        ctx.vars.insert(19, Type::Int);
 
-        context
+        ctx
     }
 
-    fn insert_struct(&mut self, name: usize, data: Vec<Field>, string_map: &[&str]) -> Result<()> {
+    fn insert_struct(&mut self, name: usize, data: Vec<Field>) -> Result<()> {
         if self.vars.contains_key(&name) {
             bail!(
-                "cannot define struct {} because variable {} exists",
-                string_map[name],
-                string_map[name]
+                "cannot define struct {} because global variable {} exists",
+                self.string_map[name],
+                self.string_map[name]
             );
         }
 
         if self.fns.contains_key(&name) {
             bail!(
                 "cannot define struct {} because function {} exists",
-                string_map[name],
-                string_map[name]
+                self.string_map[name],
+                self.string_map[name]
             );
         }
 
         if self.structs.insert(name, data).is_some() {
-            bail!("duplicate struct identifier {}", string_map[name]);
+            bail!("duplicate struct identifier {}", self.string_map[name]);
         }
 
         Ok(())
     }
 
-    fn insert_var(&mut self, name: usize, data: Type, string_map: &[&str]) -> Result<()> {
+    fn insert_var(&mut self, name: usize, data: Type) -> Result<()> {
         if self.structs.contains_key(&name) {
             bail!(
                 "cannot define variable {} because struct {} exists",
-                string_map[name],
-                string_map[name]
+                self.string_map[name],
+                self.string_map[name]
             );
         }
 
         if self.fns.contains_key(&name) {
             bail!(
                 "cannot define variable {} because function {} exists",
-                string_map[name],
-                string_map[name]
+                self.string_map[name],
+                self.string_map[name]
             );
         }
 
         if self.vars.insert(name, data).is_some() {
-            bail!("duplicate variable identifier {}", string_map[name]);
+            bail!("duplicate variable identifier {}", self.string_map[name]);
         }
 
         Ok(())
     }
 
-    fn insert_fn(
-        &mut self,
-        name: usize,
-        data: (Vec<Type>, Type),
-        string_map: &[&str],
-    ) -> Result<()> {
+    fn insert_fn(&mut self, name: usize, data: (Vec<Type>, Type)) -> Result<()> {
         if self.structs.contains_key(&name) {
             bail!(
                 "cannot define function {} because struct {} exists",
-                string_map[name],
-                string_map[name]
+                self.string_map[name],
+                self.string_map[name]
             );
         }
 
         if self.vars.contains_key(&name) {
             bail!(
-                "cannot define function {} because variable {} exists",
-                string_map[name],
-                string_map[name]
+                "cannot define function {} because global variable {} exists",
+                self.string_map[name],
+                self.string_map[name]
             );
         }
 
         if self.fns.insert(name, data).is_some() {
-            bail!("duplicate function identifier {}", string_map[name]);
+            bail!("duplicate function identifier {}", self.string_map[name]);
         }
 
         Ok(())
     }
 
-    fn validate_type(&self, ty: &Type, string_map: &[&str]) -> Result<()> {
+    fn insert_temporary_var(&mut self, name: usize, data: Type) -> Result<()> {
+        if self.structs.contains_key(&name) {
+            bail!(
+                "cannot define variable {} because struct {} exists",
+                self.string_map[name],
+                self.string_map[name]
+            );
+        }
+
+        if self.fns.contains_key(&name) {
+            bail!(
+                "cannot define variable {} because function {} exists",
+                self.string_map[name],
+                self.string_map[name]
+            );
+        }
+
+        if self.vars.contains_key(&name) {
+            bail!(
+                "cannot define variable {} because global variable {} exists",
+                self.string_map[name],
+                self.string_map[name]
+            );
+        }
+
+        if self.temporary_vars.insert(name, data).is_some() {
+            bail!("duplicate variable identifier {}", self.string_map[name]);
+        }
+
+        Ok(())
+    }
+
+    fn validate_type(&self, ty: &Type) -> Result<()> {
         match ty {
-            Type::Struct(ty) => {
+            Type::Struct(name) => {
                 ensure!(
-                    self.structs.contains_key(ty),
+                    self.structs.contains_key(name),
                     "struct definition references nonexistent struct {}",
-                    string_map[*ty]
+                    self.string_map[*name]
                 );
             }
-            Type::Array(ty, _) => self.validate_type(ty, string_map)?,
+            Type::Array(ty, _) => self.validate_type(ty)?,
             _ => {}
         }
 
@@ -172,36 +203,31 @@ impl Context {
 }
 
 trait TypeFill {
-    fn typefill(&mut self, context: &mut Context, string_map: &[&str]) -> Result<()>;
+    fn typefill(&mut self, ctx: &mut Ctx) -> Result<()>;
 }
 
 #[allow(clippy::too_many_lines)]
 impl TypeFill for Cmd {
-    fn typefill(&mut self, context: &mut Context, string_map: &[&str]) -> Result<()> {
+    fn typefill(&mut self, ctx: &mut Ctx) -> Result<()> {
         match self {
-            Cmd::Show(expr) => {
-                expr.typefill(context, string_map)?;
-            }
+            Cmd::Show(expr) => expr.typefill(ctx)?,
             Cmd::Struct(Variable(v), fields) => {
                 let mut name_check = Vec::with_capacity(fields.len());
 
                 for Field(name, ty) in fields.iter_mut() {
-                    context.validate_type(ty, string_map)?;
+                    ctx.validate_type(ty)?;
                     if name_check.contains(name) {
-                        bail!("duplicate field identifier {}", string_map[*v]);
+                        bail!("duplicate field identifier {}", ctx.string_map[*v]);
                     }
                     name_check.push(*name);
                 }
 
-                context.insert_struct(*v, fields.clone(), string_map)?;
+                ctx.insert_struct(*v, fields.clone())?;
             }
             Cmd::Let(lv, expr) => {
-                expr.typefill(context, string_map)?;
-                let expr_type = expr.get_type();
+                let expr_type = expr.typefill_get_type(ctx)?;
                 match (lv, &expr_type) {
-                    (LValue::Var(Variable(v)), _) => {
-                        context.insert_var(*v, expr_type, string_map)?;
-                    }
+                    (LValue::Var(Variable(v)), _) => ctx.insert_var(*v, expr_type)?,
                     (LValue::Array(Variable(v), dim_bindings), Type::Array(_, dims)) => {
                         ensure!(
                             *dims as usize == dim_bindings.len(),
@@ -210,40 +236,32 @@ impl TypeFill for Cmd {
                             dims
                         );
 
-                        context.insert_var(*v, expr_type, string_map)?;
+                        ctx.insert_var(*v, expr_type)?;
 
                         for Variable(bind) in dim_bindings {
-                            context.insert_var(*bind, Type::Int, string_map)?;
+                            ctx.insert_var(*bind, Type::Int)?;
                         }
                     }
                     (lv, expr_type) => bail!("binding mismatch! {:?} {:?}", lv, expr_type),
                 }
             }
             Cmd::Fn(Variable(v), bindings, ty, stmts) => {
-                context.insert_fn(
+                ctx.insert_fn(
                     *v,
                     (
                         bindings.iter().map(|Binding(_, ty)| ty.clone()).collect(),
                         ty.clone(),
                     ),
-                    string_map,
                 )?;
-
-                let mut let_cleanup = vec![];
 
                 for Binding(lv, ty) in bindings.iter() {
                     match lv {
-                        LValue::Var(Variable(v)) => {
-                            let_cleanup.push(*v);
-                            context.insert_var(*v, ty.clone(), string_map)?;
-                        }
+                        LValue::Var(Variable(v)) => ctx.insert_temporary_var(*v, ty.clone())?,
                         LValue::Array(Variable(v), dim_bindings) => {
-                            let_cleanup.push(*v);
-                            context.insert_var(*v, ty.clone(), string_map)?;
+                            ctx.insert_temporary_var(*v, ty.clone())?;
 
                             for Variable(bind) in dim_bindings {
-                                let_cleanup.push(*bind);
-                                context.insert_var(*bind, Type::Int, string_map)?;
+                                ctx.insert_temporary_var(*bind, Type::Int)?;
                             }
                         }
                     }
@@ -255,8 +273,7 @@ impl TypeFill for Cmd {
                     match stmt {
                         Statement::Return(expr) => {
                             has_return = true;
-                            expr.typefill(context, string_map)?;
-                            let expr_type = expr.get_type();
+                            let expr_type = expr.typefill_get_type(ctx)?;
                             ensure!(
                                 expr_type == *ty,
                                 "return statment expected to return {:?}, returns {:?}",
@@ -265,8 +282,7 @@ impl TypeFill for Cmd {
                             );
                         }
                         Statement::Assert(expr, _) => {
-                            expr.typefill(context, string_map)?;
-                            let expr_type = expr.get_type();
+                            let expr_type = expr.typefill_get_type(ctx)?;
                             ensure!(
                                 expr_type == Type::Bool,
                                 "assert statement requires a bool, got {:?}",
@@ -274,12 +290,10 @@ impl TypeFill for Cmd {
                             );
                         }
                         Statement::Let(lv, expr) => {
-                            expr.typefill(context, string_map)?;
-                            let expr_type = expr.get_type();
+                            let expr_type = expr.typefill_get_type(ctx)?;
                             match (lv, &expr_type) {
                                 (LValue::Var(Variable(v)), _) => {
-                                    context.insert_var(*v, expr_type, string_map)?;
-                                    let_cleanup.push(*v);
+                                    ctx.insert_temporary_var(*v, expr_type)?;
                                 }
                                 (
                                     LValue::Array(Variable(v), dim_bindings),
@@ -292,12 +306,10 @@ impl TypeFill for Cmd {
                                         dims
                                     );
 
-                                    context.insert_var(*v, expr_type, string_map)?;
-                                    let_cleanup.push(*v);
+                                    ctx.insert_temporary_var(*v, expr_type)?;
 
                                     for Variable(bind) in dim_bindings {
-                                        context.insert_var(*bind, Type::Int, string_map)?;
-                                        let_cleanup.push(*bind);
+                                        ctx.insert_temporary_var(*bind, Type::Int)?;
                                     }
                                 }
                                 lv => {
@@ -314,23 +326,19 @@ impl TypeFill for Cmd {
                         ty
                     );
                 }
-
-                for v in let_cleanup {
-                    context.vars.remove(&v);
-                }
             }
             Cmd::Write(expr, _) => {
-                expr.typefill(context, string_map)?;
-                let expr_type = expr.get_type();
-                if expr_type != Type::Array(Box::new(Type::Struct(0)), 2) {
-                    bail!("write takes rgba[,], found {:?}", expr_type)
+                let expr_type = expr.typefill_get_type(ctx)?;
+                match expr_type {
+                    Type::Array(ty, 2) if *ty == Type::Struct(0) => {}
+                    ty => bail!("write takes rgba[,], found {:?}", ty),
                 }
             }
             Cmd::Read(_, lv) => {
                 let dims = 2;
                 let expr_type = Type::Array(Box::new(Type::Struct(0)), 2);
                 match lv {
-                    LValue::Var(Variable(v)) => context.insert_var(*v, expr_type, string_map)?,
+                    LValue::Var(Variable(v)) => ctx.insert_var(*v, expr_type)?,
                     LValue::Array(Variable(v), dim_bindings) => {
                         ensure!(
                             dims == dim_bindings.len(),
@@ -339,18 +347,17 @@ impl TypeFill for Cmd {
                             dims
                         );
 
-                        context.insert_var(*v, expr_type, string_map)?;
+                        ctx.insert_var(*v, expr_type)?;
 
                         for Variable(bind) in dim_bindings {
-                            context.insert_var(*bind, Type::Int, string_map)?;
+                            ctx.insert_var(*bind, Type::Int)?;
                         }
                     }
                 }
             }
-            Cmd::Time(cmd) => cmd.typefill(context, string_map)?,
+            Cmd::Time(cmd) => cmd.typefill(ctx)?,
             Cmd::Assert(expr, _) => {
-                expr.typefill(context, string_map)?;
-                let expr_type = expr.get_type();
+                let expr_type = expr.typefill_get_type(ctx)?;
                 ensure!(
                     expr_type == Type::Bool,
                     "assert command requires a bool, got {:?}",
@@ -364,16 +371,21 @@ impl TypeFill for Cmd {
     }
 }
 
+impl Expr {
+    fn typefill_get_type(&mut self, ctx: &mut Ctx) -> Result<Type> {
+        self.typefill(ctx)?;
+        Ok(self.get_type())
+    }
+}
+
 #[allow(clippy::too_many_lines)]
 impl TypeFill for Expr {
-    fn typefill(&mut self, context: &mut Context, string_map: &[&str]) -> Result<()> {
+    fn typefill(&mut self, ctx: &mut Ctx) -> Result<()> {
         match self {
             Expr::Int(_, _) | Expr::Float(_, _) | Expr::True | Expr::False | Expr::Void => {}
             Expr::Binop(lhs, op, rhs, ret_ty) => {
-                lhs.typefill(context, string_map)?;
-                rhs.typefill(context, string_map)?;
-                let lhs_type = lhs.get_type();
-                let rhs_type = rhs.get_type();
+                let lhs_type = lhs.typefill_get_type(ctx)?;
+                let rhs_type = rhs.typefill_get_type(ctx)?;
                 *ret_ty = match (&lhs_type, &op, &rhs_type) {
                     (
                         Type::Int | Type::Float,
@@ -412,7 +424,7 @@ impl TypeFill for Expr {
                 }
             }
             Expr::Unop(op, expr, ret_ty) => {
-                expr.typefill(context, string_map)?;
+                expr.typefill(ctx)?;
                 let expr_type = expr.get_type();
                 *ret_ty = match (&op, &expr_type) {
                     (Op(TokenType::Not), Type::Bool)
@@ -420,11 +432,9 @@ impl TypeFill for Expr {
                     _ => bail!("Cannot perform unary operation {:?} {:?}", op, expr_type),
                 }
             }
-            Expr::Paren(expr) => {
-                expr.typefill(context, string_map)?;
-            }
+            Expr::Paren(expr) => expr.typefill(ctx)?,
             Expr::ArrayIndex(array, indexes, ret_ty) => {
-                array.typefill(context, string_map)?;
+                array.typefill(ctx)?;
                 let array = array.get_type();
                 match array {
                     Type::Array(ty, dims) => {
@@ -441,7 +451,7 @@ impl TypeFill for Expr {
                 }
 
                 for index in indexes {
-                    index.typefill(context, string_map)?;
+                    index.typefill(ctx)?;
                     let index = index.get_type();
                     ensure!(
                         matches!(index, Type::Int),
@@ -452,7 +462,7 @@ impl TypeFill for Expr {
             }
             Expr::ArrayLiteral(exprs, ref mut ty) => {
                 for expr in exprs.iter_mut() {
-                    expr.typefill(context, string_map)?;
+                    expr.typefill(ctx)?;
                     let expr = expr.get_type();
                     if matches!(ty, Type::None) {
                         *ty = expr;
@@ -475,11 +485,11 @@ impl TypeFill for Expr {
             }
             Expr::StructLiteral(Variable(v), exprs, ty) => {
                 for expr in exprs.iter_mut() {
-                    expr.typefill(context, string_map)?;
+                    expr.typefill(ctx)?;
                 }
 
-                let Some(struct_type) = context.structs.get(v) else {
-                    bail!("Struct of type {} is not defined", string_map[*v])
+                let Some(struct_type) = ctx.structs.get(v) else {
+                    bail!("Struct of type {} is not defined", ctx.string_map[*v])
                 };
 
                 *ty = Type::Struct(*v);
@@ -490,29 +500,29 @@ impl TypeFill for Expr {
                     ensure!(
                         expr_type == *field_type,
                         "Struct field {} is of type {:?}, received {:?}",
-                        string_map[*fv],
+                        ctx.string_map[*fv],
                         field_type,
                         expr_type
                     );
                 }
             }
             Expr::Dot(expr, Variable(v), ty) => {
-                expr.typefill(context, string_map)?;
-                let struct_type = match expr.get_type() {
-                    Type::Struct(struct_type) => struct_type,
+                expr.typefill(ctx)?;
+                let struct_name = match expr.get_type() {
+                    Type::Struct(struct_name) => struct_name,
                     t => bail!("Cannot perform operation `.` on non struct {:?}", t),
                 };
 
-                let Some(fields) = context.structs.get(&struct_type) else {
-                    bail!("Struct of type {} is not defined", string_map[*v]);
+                let Some(fields) = ctx.structs.get(&struct_name) else {
+                    bail!("Struct of type {} is not defined", ctx.string_map[*v]);
                 };
 
                 let Some(Field(_, fty)) = fields.iter().find(|Field(Variable(fv), _)| fv == v)
                 else {
                     bail!(
                         "Field {} does not exist on struct of type {}",
-                        string_map[*v],
-                        string_map[struct_type]
+                        ctx.string_map[*v],
+                        ctx.string_map[struct_name]
                     );
                 };
 
@@ -520,21 +530,27 @@ impl TypeFill for Expr {
             }
             Expr::Call(Variable(v), exprs, ty) => {
                 for expr in exprs.iter_mut() {
-                    expr.typefill(context, string_map)?;
+                    expr.typefill(ctx)?;
                 }
 
-                let Some((args, ret_type)) = context.fns.get(v) else {
-                    bail!("struct of type {} is not defined", string_map[*v]);
+                let Some((args, ret_type)) = ctx.fns.get(v) else {
+                    bail!("struct of type {} is not defined", ctx.string_map[*v]);
                 };
 
                 match exprs.len().cmp(&args.len()) {
-                    std::cmp::Ordering::Less => {
-                        bail!("too few arguments passed to function {}", string_map[*v])
+                    Ordering::Less => {
+                        bail!(
+                            "too few arguments passed to function {}",
+                            ctx.string_map[*v]
+                        )
                     }
-                    std::cmp::Ordering::Greater => {
-                        bail!("too many arguments passed to function {}", string_map[*v])
+                    Ordering::Greater => {
+                        bail!(
+                            "too many arguments passed to function {}",
+                            ctx.string_map[*v]
+                        )
                     }
-                    std::cmp::Ordering::Equal => {}
+                    Ordering::Equal => {}
                 }
 
                 for (expr_type, arg_type) in exprs.iter().map(Expr::get_type).zip(args.iter()) {
@@ -549,16 +565,16 @@ impl TypeFill for Expr {
                 *ty = ret_type.clone();
             }
             Expr::If(cond, r#true, r#false, ty) => {
-                cond.typefill(context, string_map)?;
+                cond.typefill(ctx)?;
                 let cond_type = cond.get_type();
                 ensure!(
                     matches!(cond_type, Type::Bool),
                     "Condition in if expression must be a boolean, found {:?}",
                     cond_type
                 );
-                r#true.typefill(context, string_map)?;
+                r#true.typefill(ctx)?;
                 let true_type = r#true.get_type();
-                r#false.typefill(context, string_map)?;
+                r#false.typefill(ctx)?;
                 let false_type = r#false.get_type();
 
                 ensure!(
@@ -571,8 +587,8 @@ impl TypeFill for Expr {
                 *ty = true_type;
             }
             Expr::Variable(Variable(v), ret_ty) => {
-                let Some(ty) = context.vars.get(v) else {
-                    bail!("Variable {} is undefined", string_map[*v]);
+                let Some(ty) = ctx.vars.get(v).or_else(|| ctx.temporary_vars.get(v)) else {
+                    bail!("Variable {} is undefined", ctx.string_map[*v]);
                 };
 
                 *ret_ty = ty.clone();
@@ -581,30 +597,30 @@ impl TypeFill for Expr {
                 ensure!(!fields.is_empty(), "loops require at least one field");
 
                 for LoopField(_, le) in fields.iter_mut() {
-                    le.typefill(context, string_map)?;
+                    let le = le.typefill_get_type(ctx)?;
                     ensure!(
-                        le.get_type() == Type::Int,
+                        le == Type::Int,
                         "can only loop over integers, found {:?}",
-                        le.get_type()
+                        le
                     );
                 }
 
                 for LoopField(Variable(lv), le) in fields.iter_mut() {
-                    context.insert_var(*lv, le.get_type(), string_map)?;
+                    ctx.insert_var(*lv, le.get_type())?;
                 }
 
-                expr.typefill(context, string_map)?;
+                expr.typefill(ctx)?;
                 *ret_ty = Type::Array(Box::new(expr.get_type()), fields.len() as u8);
 
                 for LoopField(Variable(lv), _) in fields {
-                    context.vars.remove(lv);
+                    ctx.vars.remove(lv);
                 }
             }
             Expr::SumLoop(fields, expr, ret_ty) => {
                 ensure!(!fields.is_empty(), "loops require at least one field");
 
                 for LoopField(_, le) in fields.iter_mut() {
-                    le.typefill(context, string_map)?;
+                    le.typefill(ctx)?;
                     ensure!(
                         le.get_type() == Type::Int,
                         "can only loop over integers, found {:?}",
@@ -613,10 +629,10 @@ impl TypeFill for Expr {
                 }
 
                 for LoopField(Variable(lv), le) in fields.iter_mut() {
-                    context.insert_var(*lv, le.get_type(), string_map)?;
+                    ctx.insert_var(*lv, le.get_type())?;
                 }
 
-                expr.typefill(context, string_map)?;
+                expr.typefill(ctx)?;
                 *ret_ty = expr.get_type();
 
                 ensure!(
@@ -626,7 +642,7 @@ impl TypeFill for Expr {
                 );
 
                 for LoopField(Variable(lv), _) in fields {
-                    context.vars.remove(lv);
+                    ctx.vars.remove(lv);
                 }
             }
         }
@@ -636,11 +652,12 @@ impl TypeFill for Expr {
 }
 
 /// # Errors
-pub fn typecheck(cmds: &mut [Cmd], string_map: &[&str], tokens_consumed: &[usize]) -> Result<()> {
-    let mut context = Context::new(string_map);
+pub fn typecheck(cmds: &mut [Cmd], string_map: &[&str], _tokens_consumed: &[usize]) -> Result<()> {
+    let mut ctx = Ctx::new(string_map);
 
-    for (i, cmd) in cmds.iter_mut().enumerate() {
-        cmd.typefill(&mut context, string_map).inspect_err(|_| {})?;
+    for cmd in cmds {
+        cmd.typefill(&mut ctx).inspect_err(|_| {})?;
+        ctx.temporary_vars.clear();
     }
 
     PRINT_TYPES.with(|print_types| print_types.set(true));

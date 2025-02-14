@@ -235,9 +235,10 @@ pub enum Expr {
     True,
     False,
     Void,
+    Paren(Box<Expr>),
+    // Typed
     Variable(Variable, Type),
     ArrayLiteral(Vec<Expr>, Type),
-    Paren(Box<Expr>),
     ArrayIndex(Box<Expr>, Vec<Expr>, Type),
     Binop(Box<Expr>, Op, Box<Expr>, Type),
     Call(Variable, Vec<Expr>, Type),
@@ -514,7 +515,7 @@ impl PartialEq for Type {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Type::Struct(s), Type::Struct(o)) => s == o,
-            (Type::Array(s, _), Type::Array(o, _)) => s == o,
+            (Type::Array(s, l), Type::Array(o, l2)) => s == o && l == l2,
             (Type::Float, Type::Float)
             | (Type::Int, Type::Int)
             | (Type::Bool, Type::Bool)

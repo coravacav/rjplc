@@ -3,7 +3,7 @@ use crate::{measure::print_timings, parse::parse, test_correct, test_solos, Cust
 use std::path::Path;
 
 #[test]
-fn test_parse_correct() {
+fn test_typecheck_correct() {
     use regex::Regex;
     let regex = Regex::new(r"\n\s+").unwrap();
 
@@ -40,7 +40,7 @@ fn test_parse_correct() {
 }
 
 #[test]
-fn test_parse_fails() {
+fn test_typecheck_fails() {
     let tester = |file: &str, file_path: &Path| {
         let Ok((tokens, string_map)) = crate::lex::lex(file) else {
             return;
