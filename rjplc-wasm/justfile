@@ -1,9 +1,15 @@
-default: build
+default:
+	just --list
 
-build: 
+build-web:
 	wasm-pack build --target web
 
-portfolio: build
+move-web: build-web
 	rm -rf ../../portfolio/rjplc-wasm
 	cp -r pkg ../../portfolio/rjplc-wasm
 	rm ../../portfolio/rjplc-wasm/.gitignore
+
+clean:
+	rm -rf pkg
+
+portfolio: build-web move-web clean

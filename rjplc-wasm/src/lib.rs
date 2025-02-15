@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use rjplc::{lex, parse, CustomDisplay};
+use rjplc::{lex, parse, typecheck, CustomDisplay};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
@@ -68,26 +68,43 @@ pub fn perform_steps(contents: &str) -> Output {
 
     successful_steps.lex_output = Some(output);
 
-    let parsed = match parse::parse(&tokens, &string_map, contents, Path::new("textarea")) {
-        Ok(parsed) => parsed,
-        Err(e) => {
-            successful_steps.parse_output = Some(format!("{e}"));
-            return successful_steps;
-        }
-    };
+    let (mut cmds, tokens_consumed) =
+        match parse::parse(&tokens, &string_map, contents, Path::new("textarea")) {
+            Ok(cmds) => cmds,
+            Err(e) => {
+                successful_steps.parse_output = Some(format!("{e}"));
+                return successful_steps;
+            }
+        };
 
     successful_steps.parse_success = true;
 
     let mut output = String::new();
 
-    for parsed in parsed {
-        parsed
-            .fmt(&mut output, &string_map)
+    for cmd in &cmds {
+        cmd.fmt(&mut output, &string_map)
             .expect("writing should always work");
         output.push('\n');
     }
 
     successful_steps.parse_output = Some(output);
+
+    if typecheck::typecheck(&mut cmds, &string_map, &tokens_consumed).is_err() {
+        successful_steps.type_check_output = Some("Typechecking failed".to_string());
+        return successful_steps;
+    }
+
+    successful_steps.type_check_success = true;
+
+    let mut output = String::new();
+
+    for cmd in cmds {
+        cmd.fmt(&mut output, &string_map)
+            .expect("writing should always work");
+        output.push('\n');
+    }
+
+    successful_steps.type_check_output = Some(output);
 
     successful_steps
 }
