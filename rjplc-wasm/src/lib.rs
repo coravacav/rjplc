@@ -89,8 +89,8 @@ pub fn perform_steps(contents: &str) -> Output {
 
     successful_steps.parse_output = Some(output);
 
-    if typecheck::typecheck(&mut cmds, &string_map, &tokens_consumed).is_err() {
-        successful_steps.type_check_output = Some("Typechecking failed".to_string());
+    if let Err(e) = typecheck::typecheck(&mut cmds, &string_map, &tokens_consumed) {
+        successful_steps.type_check_output = Some(format!("{e}"));
         return successful_steps;
     }
 
