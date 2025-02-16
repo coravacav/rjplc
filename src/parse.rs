@@ -502,7 +502,7 @@ impl<'a, 'b> Consume<'a, 'b> for LValue {
 #[derive(Debug, Clone)]
 pub enum Type {
     // TODO maybe add wrapping type?
-    Struct(usize),
+    Struct(Variable),
     Array(Box<Type>, u8),
     Float,
     Int,
@@ -530,7 +530,7 @@ impl<'a, 'b> Consume<'a, 'b> for Type {
         measure!("type");
         let next = parser.next(data);
         let (mut parser, mut ty) = match (next.0, next.1.get_type()) {
-            (parser, TokenType::VARIABLE) => (parser, Type::Struct(next.1.get_index())),
+            (parser, TokenType::VARIABLE) => (parser, Type::Struct(Variable(next.1.get_index()))),
             (parser, TokenType::INT) => (parser, Type::Int),
             (parser, TokenType::BOOL) => (parser, Type::Bool),
             (parser, TokenType::VOID) => (parser, Type::Void),

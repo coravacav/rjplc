@@ -163,7 +163,7 @@ impl<'a, 'b> Ctx<'a, 'b> {
 
     fn check_self_referential_struct(&self, ty: &Type) -> Result<()> {
         match ty {
-            Type::Struct(name) if !self.structs.contains_key(name) => Err(anyhow!(
+            Type::Struct(Variable(name)) if !self.structs.contains_key(name) => Err(anyhow!(
                 "struct definition references nonexistent struct {}",
                 self.string_map[*name]
             )),
@@ -301,13 +301,13 @@ impl TypeFill for Cmd {
             Cmd::Write(expr, _) => {
                 let expr_type = expr.typefill_get_type(ctx)?;
                 match expr_type {
-                    Type::Array(ty, 2) if *ty == Type::Struct(0) => {}
+                    Type::Array(ty, 2) if *ty == Type::Struct(Variable(0)) => {}
                     ty => bail!("write takes rgba[,], found {:?}", ty),
                 }
             }
             Cmd::Read(_, lv) => {
                 let dims = 2;
-                let expr_type = Type::Array(Box::new(Type::Struct(0)), 2);
+                let expr_type = Type::Array(Box::new(Type::Struct(Variable(0))), 2);
                 match lv {
                     LValue::Var(Variable(v)) => ctx.insert_var(*v, expr_type)?,
                     LValue::Array(Variable(v), dim_bindings) => {
@@ -463,7 +463,7 @@ impl TypeFill for Expr {
                     bail!("struct of type {} is not defined", ctx.string_map[*v])
                 };
 
-                *ty = Type::Struct(*v);
+                *ty = Type::Struct(Variable(*v));
 
                 for (expr_type, Field(Variable(fv), field_type)) in
                     exprs.iter().map(Expr::get_type).zip(struct_type.iter())
@@ -480,7 +480,7 @@ impl TypeFill for Expr {
             Expr::Dot(expr, Variable(v), ty) => {
                 expr.typefill(ctx)?;
                 let struct_name = match expr.get_type() {
-                    Type::Struct(struct_name) => struct_name,
+                    Type::Struct(Variable(struct_name)) => struct_name,
                     t => bail!("cannot perform operation `.` on non struct {:?}", t),
                 };
 

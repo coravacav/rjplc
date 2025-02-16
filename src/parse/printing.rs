@@ -293,7 +293,7 @@ impl CustomDisplay for LValue {
 impl CustomDisplay for Type {
     fn fmt(&self, f: &mut String, string_map: &[&str]) -> std::fmt::Result {
         match self {
-            Type::Struct(s) => {
+            Type::Struct(Variable(s)) => {
                 f.write_str("(StructType ")?;
                 f.write_str(string_map[*s])?;
                 f.write_char(')')
