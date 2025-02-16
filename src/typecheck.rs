@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 
 use ahash::AHashMap;
-use anyhow::{bail, ensure, Result};
+use anyhow::{anyhow, bail, ensure, Context, Result};
 
 use crate::{
     lex::TokenType,
@@ -81,22 +81,39 @@ impl<'a, 'b> Ctx<'a, 'b> {
         ctx
     }
 
-    fn insert_struct(&mut self, name: usize, data: Vec<Field>) -> Result<()> {
-        if self.vars.contains_key(&name) {
-            bail!(
-                "cannot define struct {} because global variable {} exists",
-                self.string_map[name],
-                self.string_map[name]
-            );
+    fn check_struct(&self, name: usize) -> Result<()> {
+        if self.structs.contains_key(&name) {
+            bail!("struct {} exists", self.string_map[name])
         }
+        Ok(())
+    }
 
+    fn check_fn(&self, name: usize) -> Result<()> {
         if self.fns.contains_key(&name) {
-            bail!(
-                "cannot define struct {} because function {} exists",
-                self.string_map[name],
-                self.string_map[name]
-            );
+            bail!("function {} exists", self.string_map[name])
         }
+        Ok(())
+    }
+
+    fn check_var(&self, name: usize) -> Result<()> {
+        if self.vars.contains_key(&name) {
+            bail!("variable {} exists", self.string_map[name])
+        }
+        Ok(())
+    }
+
+    fn check_temporary_var(&self, name: usize) -> Result<()> {
+        if self.temporary_vars.contains_key(&name) {
+            bail!("variable {} exists", self.string_map[name])
+        }
+        Ok(())
+    }
+
+    fn insert_struct(&mut self, name: usize, data: Vec<Field>) -> Result<()> {
+        self.check_var(name)
+            .and(self.check_temporary_var(name))
+            .and(self.check_fn(name))
+            .with_context(|| format!("could not define struct {}", self.string_map[name]))?;
 
         if self.structs.insert(name, data).is_some() {
             bail!("duplicate struct identifier {}", self.string_map[name]);
@@ -106,21 +123,10 @@ impl<'a, 'b> Ctx<'a, 'b> {
     }
 
     fn insert_var(&mut self, name: usize, data: Type) -> Result<()> {
-        if self.structs.contains_key(&name) {
-            bail!(
-                "cannot define variable {} because struct {} exists",
-                self.string_map[name],
-                self.string_map[name]
-            );
-        }
-
-        if self.fns.contains_key(&name) {
-            bail!(
-                "cannot define variable {} because function {} exists",
-                self.string_map[name],
-                self.string_map[name]
-            );
-        }
+        self.check_temporary_var(name)
+            .and(self.check_fn(name))
+            .and(self.check_struct(name))
+            .with_context(|| format!("could not define variable {}", self.string_map[name]))?;
 
         if self.vars.insert(name, data).is_some() {
             bail!("duplicate variable identifier {}", self.string_map[name]);
@@ -130,21 +136,10 @@ impl<'a, 'b> Ctx<'a, 'b> {
     }
 
     fn insert_fn(&mut self, name: usize, data: (Vec<Type>, Type)) -> Result<()> {
-        if self.structs.contains_key(&name) {
-            bail!(
-                "cannot define function {} because struct {} exists",
-                self.string_map[name],
-                self.string_map[name]
-            );
-        }
-
-        if self.vars.contains_key(&name) {
-            bail!(
-                "cannot define function {} because global variable {} exists",
-                self.string_map[name],
-                self.string_map[name]
-            );
-        }
+        self.check_var(name)
+            .and(self.check_temporary_var(name))
+            .and(self.check_struct(name))
+            .with_context(|| format!("could not define function {}", self.string_map[name]))?;
 
         if self.fns.insert(name, data).is_some() {
             bail!("duplicate function identifier {}", self.string_map[name]);
@@ -154,29 +149,10 @@ impl<'a, 'b> Ctx<'a, 'b> {
     }
 
     fn insert_temporary_var(&mut self, name: usize, data: Type) -> Result<()> {
-        if self.structs.contains_key(&name) {
-            bail!(
-                "cannot define variable {} because struct {} exists",
-                self.string_map[name],
-                self.string_map[name]
-            );
-        }
-
-        if self.fns.contains_key(&name) {
-            bail!(
-                "cannot define variable {} because function {} exists",
-                self.string_map[name],
-                self.string_map[name]
-            );
-        }
-
-        if self.vars.contains_key(&name) {
-            bail!(
-                "cannot define variable {} because global variable {} exists",
-                self.string_map[name],
-                self.string_map[name]
-            );
-        }
+        self.check_var(name)
+            .and(self.check_fn(name))
+            .and(self.check_struct(name))
+            .with_context(|| format!("could not define variable {}", self.string_map[name]))?;
 
         if self.temporary_vars.insert(name, data).is_some() {
             bail!("duplicate variable identifier {}", self.string_map[name]);
@@ -185,20 +161,15 @@ impl<'a, 'b> Ctx<'a, 'b> {
         Ok(())
     }
 
-    fn validate_type(&self, ty: &Type) -> Result<()> {
+    fn check_self_referential_struct(&self, ty: &Type) -> Result<()> {
         match ty {
-            Type::Struct(name) => {
-                ensure!(
-                    self.structs.contains_key(name),
-                    "struct definition references nonexistent struct {}",
-                    self.string_map[*name]
-                );
-            }
-            Type::Array(ty, _) => self.validate_type(ty)?,
-            _ => {}
+            Type::Struct(name) if !self.structs.contains_key(name) => Err(anyhow!(
+                "struct definition references nonexistent struct {}",
+                self.string_map[*name]
+            )),
+            Type::Array(ty, _) => self.check_self_referential_struct(ty),
+            _ => Ok(()),
         }
-
-        Ok(())
     }
 }
 
@@ -215,7 +186,7 @@ impl TypeFill for Cmd {
                 let mut name_check = Vec::with_capacity(fields.len());
 
                 for Field(name, ty) in fields.iter_mut() {
-                    ctx.validate_type(ty)?;
+                    ctx.check_self_referential_struct(ty)?;
                     if name_check.contains(name) {
                         bail!("duplicate field identifier {}", ctx.string_map[*v]);
                     }
@@ -301,7 +272,7 @@ impl TypeFill for Cmd {
                                 ) => {
                                     ensure!(
                                         *dims as usize == dim_bindings.len(),
-                                        "Cannot bind array length bindings {:?} to array of dimension {}",
+                                        "cannot bind array length bindings {:?} to array of dimension {}",
                                         dim_bindings,
                                         dims
                                     );
@@ -342,7 +313,7 @@ impl TypeFill for Cmd {
                     LValue::Array(Variable(v), dim_bindings) => {
                         ensure!(
                             dims == dim_bindings.len(),
-                            "Cannot bind array length bindings {:?} to array of dimension {}",
+                            "cannot bind array length bindings {:?} to array of dimension {}",
                             dim_bindings,
                             dims
                         );
@@ -416,7 +387,7 @@ impl TypeFill for Expr {
                         Type::Int | Type::Float,
                     ) if lhs_type == rhs_type => lhs_type,
                     _ => bail!(
-                        "Cannot perform binary operation {:?} {:?} {:?}",
+                        "cannot perform binary operation {:?} {:?} {:?}",
                         lhs_type,
                         op,
                         rhs_type
@@ -429,7 +400,7 @@ impl TypeFill for Expr {
                 *ret_ty = match (&op, &expr_type) {
                     (Op(TokenType::Not), Type::Bool)
                     | (Op(TokenType::Sub), Type::Int | Type::Float) => expr_type,
-                    _ => bail!("Cannot perform unary operation {:?} {:?}", op, expr_type),
+                    _ => bail!("cannot perform unary operation {:?} {:?}", op, expr_type),
                 }
             }
             Expr::Paren(expr) => expr.typefill(ctx)?,
@@ -440,7 +411,7 @@ impl TypeFill for Expr {
                     Type::Array(ty, dims) => {
                         ensure!(
                             indexes.len() as u8 == dims,
-                            "Cannot index {} dimensional array with {} indices",
+                            "cannot index {} dimensional array with {} indices",
                             dims,
                             indexes.len()
                         );
@@ -489,7 +460,7 @@ impl TypeFill for Expr {
                 }
 
                 let Some(struct_type) = ctx.structs.get(v) else {
-                    bail!("Struct of type {} is not defined", ctx.string_map[*v])
+                    bail!("struct of type {} is not defined", ctx.string_map[*v])
                 };
 
                 *ty = Type::Struct(*v);
@@ -499,7 +470,7 @@ impl TypeFill for Expr {
                 {
                     ensure!(
                         expr_type == *field_type,
-                        "Struct field {} is of type {:?}, received {:?}",
+                        "struct field {} is of type {:?}, received {:?}",
                         ctx.string_map[*fv],
                         field_type,
                         expr_type
@@ -510,17 +481,17 @@ impl TypeFill for Expr {
                 expr.typefill(ctx)?;
                 let struct_name = match expr.get_type() {
                     Type::Struct(struct_name) => struct_name,
-                    t => bail!("Cannot perform operation `.` on non struct {:?}", t),
+                    t => bail!("cannot perform operation `.` on non struct {:?}", t),
                 };
 
                 let Some(fields) = ctx.structs.get(&struct_name) else {
-                    bail!("Struct of type {} is not defined", ctx.string_map[*v]);
+                    bail!("struct of type {} is not defined", ctx.string_map[*v]);
                 };
 
                 let Some(Field(_, fty)) = fields.iter().find(|Field(Variable(fv), _)| fv == v)
                 else {
                     bail!(
-                        "Field {} does not exist on struct of type {}",
+                        "field {} does not exist on struct of type {}",
                         ctx.string_map[*v],
                         ctx.string_map[struct_name]
                     );
@@ -569,9 +540,10 @@ impl TypeFill for Expr {
                 let cond_type = cond.get_type();
                 ensure!(
                     matches!(cond_type, Type::Bool),
-                    "Condition in if expression must be a boolean, found {:?}",
+                    "condition in if expression must be a boolean, found {:?}",
                     cond_type
                 );
+
                 r#true.typefill(ctx)?;
                 let true_type = r#true.get_type();
                 r#false.typefill(ctx)?;
@@ -579,7 +551,7 @@ impl TypeFill for Expr {
 
                 ensure!(
                     true_type == false_type,
-                    "Both branches of an if expression must match types. Found {:?} and {:?}",
+                    "both branches of an if expression must match types. Found {:?} and {:?}",
                     true_type,
                     false_type
                 );
@@ -588,7 +560,7 @@ impl TypeFill for Expr {
             }
             Expr::Variable(Variable(v), ret_ty) => {
                 let Some(ty) = ctx.vars.get(v).or_else(|| ctx.temporary_vars.get(v)) else {
-                    bail!("Variable {} is undefined", ctx.string_map[*v]);
+                    bail!("variable {} is undefined", ctx.string_map[*v]);
                 };
 
                 *ret_ty = ty.clone();
