@@ -3,6 +3,11 @@
 
 use std::cell::Cell;
 
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
+
 use itertools::Itertools;
 
 pub mod lex;
@@ -108,31 +113,9 @@ fn undo_slice_by_cuts<'a, const N: usize, const M: usize>(
         .unwrap()
 }
 
-#[cfg(test)]
-fn test_correct(directory: &str, mut tester: impl FnMut(&str, &str)) {
-    use std::{fs, path::Path};
-    let folder = Path::new(directory);
-    assert!(folder.exists(), "Could not find {}", folder.display());
-
-    let mut all_test_paths = vec![];
-    let mut all_solution_paths = vec![];
-
-    let test_paths = fs::read_dir(folder).unwrap();
-
-    let test_paths = test_paths
-        .flatten()
-        .filter(|f| f.file_type().unwrap().is_file())
-        .filter(|f| f.path().extension().unwrap() == "jpl");
-    for test_path in test_paths {
-        let test_path = test_path.path();
-        let mut solution_path = test_path.clone();
-        // add .expected to the end of the path
-        solution_path.set_extension("jpl.expected");
-
-        all_test_paths.push(test_path);
-        all_solution_paths.push(solution_path);
-    }
-
+/// # Panics
+pub fn test_correct(directory: &str, mut tester: impl FnMut(&str, &str)) {
+    let (all_test_paths, all_solution_paths) = prepare_test_correct(directory);
     for (test_path, solution_path) in all_test_paths.iter().zip(all_solution_paths.iter()) {
         #[cfg(not(feature = "measure"))]
         println!("{}", test_path.display());
@@ -148,27 +131,45 @@ fn test_correct(directory: &str, mut tester: impl FnMut(&str, &str)) {
     }
 }
 
-#[cfg(test)]
-fn test_solos(directory: &str, mut tester: impl FnMut(&str, &std::path::Path)) {
-    use std::{fs, path::Path};
+#[must_use]
+pub fn prepare_test_correct(directory: &str) -> (Vec<PathBuf>, Vec<PathBuf>) {
+    let all_test_paths = get_test_paths(directory);
+    let mut all_solution_paths = vec![];
 
-    let folder = Path::new(directory);
-    assert!(folder.exists(), "Could not find {}", folder.display());
+    for test_path in &all_test_paths {
+        let mut solution_path = test_path.clone();
+        // add .expected to the end of the path
+        solution_path.set_extension("jpl.expected");
 
-    let test_paths = fs::read_dir(folder)
-        .unwrap()
-        .flatten()
-        .filter(|f| f.file_type().unwrap().is_file())
-        .filter(|f| f.path().extension().unwrap() == "jpl");
+        all_solution_paths.push(solution_path);
+    }
 
-    for test_path in test_paths {
-        let test_path = test_path.path();
+    (all_test_paths, all_solution_paths)
+}
+
+pub fn test_solos(directory: &str, mut tester: impl FnMut(&str, &std::path::Path)) {
+    for test_path in get_test_paths(directory) {
         #[cfg(not(feature = "measure"))]
         println!("{}", test_path.display());
         if let Ok(file) = fs::read_to_string(&test_path) {
             tester(&file, &test_path);
         }
     }
+}
+
+/// # Panics
+#[must_use]
+pub fn get_test_paths(directory: &str) -> Vec<PathBuf> {
+    let folder = Path::new(directory);
+    assert!(folder.exists(), "Could not find {}", folder.display());
+
+    fs::read_dir(folder)
+        .unwrap()
+        .flatten()
+        .filter(|f| f.file_type().unwrap().is_file())
+        .filter(|f| f.path().extension().unwrap() == "jpl")
+        .map(|f| f.path())
+        .collect_vec()
 }
 
 pub trait CustomDisplay {
