@@ -405,8 +405,7 @@ impl TypeFill for Expr {
             }
             Expr::Paren(expr) => expr.typefill(ctx)?,
             Expr::ArrayIndex(array, indexes, ret_ty) => {
-                array.typefill(ctx)?;
-                let array = array.get_type();
+                let array = array.typefill_get_type(ctx)?;
                 match array {
                     Type::Array(ty, dims) => {
                         ensure!(
@@ -478,8 +477,7 @@ impl TypeFill for Expr {
                 }
             }
             Expr::Dot(expr, Variable(v), ty) => {
-                expr.typefill(ctx)?;
-                let struct_name = match expr.get_type() {
+                let struct_name = match expr.typefill_get_type(ctx)? {
                     Type::Struct(Variable(struct_name)) => struct_name,
                     t => bail!("cannot perform operation `.` on non struct {:?}", t),
                 };

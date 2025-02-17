@@ -3,7 +3,7 @@ use std::{fmt::Write, path::Path};
 use anyhow::{bail, Result};
 use parser::{
     check, consume, consume_list, consume_list_impl, localize_error, miss, Consume, ParseResult,
-    Parser, StaticParserData,
+    Parser, ParserContext,
 };
 
 use crate::{
@@ -20,9 +20,9 @@ mod tests;
 pub struct Variable(pub usize);
 
 impl<'a, 'b> Consume<'a, 'b> for Variable {
-    fn consume(parser: Parser, data: &'b StaticParserData<'a>) -> ParseResult<'a, Self> {
+    fn consume(parser: Parser, ctx: &'b ParserContext<'a>) -> ParseResult<'a, Self> {
         measure!("variable");
-        let (parser, s) = match parser.next(data) {
+        let (parser, s) = match parser.next(ctx) {
             (parser, t) if t.get_type() == TokenType::VARIABLE => (parser, t.get_index()),
             (_, t) => miss!(parser, "expected variable, found {:?}", t),
         };
@@ -35,9 +35,9 @@ impl<'a, 'b> Consume<'a, 'b> for Variable {
 pub struct LiteralString(usize);
 
 impl<'a, 'b> Consume<'a, 'b> for LiteralString {
-    fn consume(parser: Parser, data: &'b StaticParserData<'a>) -> ParseResult<'a, Self> {
+    fn consume(parser: Parser, ctx: &'b ParserContext<'a>) -> ParseResult<'a, Self> {
         measure!("string_lit");
-        let s = match parser.first(data) {
+        let s = match parser.first(ctx) {
             t if t.get_type() == TokenType::STRING => t.get_index(),
             t => miss!(parser, "expected string, found {t:?}"),
         };
@@ -50,12 +50,12 @@ impl<'a, 'b> Consume<'a, 'b> for LiteralString {
 pub struct LoopField(pub Variable, pub Expr);
 
 impl<'a, 'b> Consume<'a, 'b> for LoopField {
-    fn consume(parser: Parser, data: &'b StaticParserData<'a>) -> ParseResult<'a, Self> {
+    fn consume(parser: Parser, ctx: &'b ParserContext<'a>) -> ParseResult<'a, Self> {
         measure!("arraySumField");
-        localize_error!(parser, data, LoopField, {
-            consume!(parser, data, Variable, s);
-            check!(parser, data, COLON);
-            consume!(parser, data, Expr, expr);
+        localize_error!(parser, ctx, LoopField, {
+            consume!(parser, ctx, Variable, s);
+            check!(parser, ctx, COLON);
+            consume!(parser, ctx, Expr, expr);
             parser.complete(LoopField(s, expr))
         })
     }
@@ -65,12 +65,12 @@ impl<'a, 'b> Consume<'a, 'b> for LoopField {
 pub struct Field(pub Variable, pub Type);
 
 impl<'a, 'b> Consume<'a, 'b> for Field {
-    fn consume(parser: Parser, data: &'b StaticParserData<'a>) -> ParseResult<'a, Self> {
+    fn consume(parser: Parser, ctx: &'b ParserContext<'a>) -> ParseResult<'a, Self> {
         measure!("field");
-        localize_error!(parser, data, Field, {
-            consume!(parser, data, Variable, s);
-            check!(parser, data, COLON);
-            consume!(parser, data, Type, ty);
+        localize_error!(parser, ctx, Field, {
+            consume!(parser, ctx, Variable, s);
+            check!(parser, ctx, COLON);
+            consume!(parser, ctx, Type, ty);
             parser.complete(Field(s, ty))
         })
     }
@@ -90,69 +90,69 @@ pub enum Cmd {
 }
 
 impl<'a, 'b> Consume<'a, 'b> for Cmd {
-    fn consume(parser: Parser, data: &'b StaticParserData<'a>) -> ParseResult<'a, Self> {
+    fn consume(parser: Parser, ctx: &'b ParserContext<'a>) -> ParseResult<'a, Self> {
         measure!("cmd");
-        match parser.next_type(data) {
+        match parser.next_type(ctx) {
             (mut parser, TokenType::READ) => {
-                check!(parser, data, IMAGE);
-                consume!(parser, data, LiteralString, s);
-                check!(parser, data, TO);
-                consume!(parser, data, LValue, lvalue);
-                check!(parser, data, NEWLINE);
+                check!(parser, ctx, IMAGE);
+                consume!(parser, ctx, LiteralString, s);
+                check!(parser, ctx, TO);
+                consume!(parser, ctx, LValue, lvalue);
+                check!(parser, ctx, NEWLINE);
                 parser.complete(Self::Read(s, lvalue))
             }
             (mut parser, TokenType::TIME) => {
-                consume!(parser, data, Cmd, cmd);
+                consume!(parser, ctx, Cmd, cmd);
                 parser.complete(Self::Time(Box::new(cmd)))
             }
             (mut parser, TokenType::LET) => {
-                consume!(parser, data, LValue, lvalue);
-                check!(parser, data, EQUALS);
-                consume!(parser, data, Expr, expr);
-                check!(parser, data, NEWLINE);
+                consume!(parser, ctx, LValue, lvalue);
+                check!(parser, ctx, EQUALS);
+                consume!(parser, ctx, Expr, expr);
+                check!(parser, ctx, NEWLINE);
                 parser.complete(Self::Let(lvalue, expr))
             }
             (mut parser, TokenType::ASSERT) => {
-                consume!(parser, data, Expr, expr);
-                check!(parser, data, COMMA);
-                consume!(parser, data, LiteralString, s);
-                check!(parser, data, NEWLINE);
+                consume!(parser, ctx, Expr, expr);
+                check!(parser, ctx, COMMA);
+                consume!(parser, ctx, LiteralString, s);
+                check!(parser, ctx, NEWLINE);
                 parser.complete(Self::Assert(expr, s))
             }
             (mut parser, TokenType::SHOW) => {
-                consume!(parser, data, Expr, expr);
-                check!(parser, data, NEWLINE);
+                consume!(parser, ctx, Expr, expr);
+                check!(parser, ctx, NEWLINE);
                 parser.complete(Self::Show(expr))
             }
             (mut parser, TokenType::WRITE) => {
-                check!(parser, data, IMAGE);
-                consume!(parser, data, Expr, expr);
-                check!(parser, data, TO);
-                consume!(parser, data, LiteralString, s);
-                check!(parser, data, NEWLINE);
+                check!(parser, ctx, IMAGE);
+                consume!(parser, ctx, Expr, expr);
+                check!(parser, ctx, TO);
+                consume!(parser, ctx, LiteralString, s);
+                check!(parser, ctx, NEWLINE);
                 parser.complete(Self::Write(expr, s))
             }
             (mut parser, TokenType::PRINT) => {
-                consume!(parser, data, LiteralString, s);
-                check!(parser, data, NEWLINE);
+                consume!(parser, ctx, LiteralString, s);
+                check!(parser, ctx, NEWLINE);
                 parser.complete(Self::Print(s))
             }
             (mut parser, TokenType::FN) => {
-                consume!(parser, data, Variable, v);
-                check!(parser, data, LPAREN);
-                consume_list!(parser, data, RPAREN, bindings);
-                check!(parser, data, COLON);
-                consume!(parser, data, Type, ty);
-                check!(parser, data, LCURLY);
-                check!(parser, data, NEWLINE);
-                consume_list!(parser, data, RCURLY, NEWLINE, true, statements);
+                consume!(parser, ctx, Variable, v);
+                check!(parser, ctx, LPAREN);
+                consume_list!(parser, ctx, RPAREN, bindings);
+                check!(parser, ctx, COLON);
+                consume!(parser, ctx, Type, ty);
+                check!(parser, ctx, LCURLY);
+                check!(parser, ctx, NEWLINE);
+                consume_list!(parser, ctx, RCURLY, NEWLINE, true, statements);
                 parser.complete(Self::Fn(v, bindings, ty, statements))
             }
             (mut parser, TokenType::STRUCT) => {
-                consume!(parser, data, Variable, v);
-                check!(parser, data, LCURLY);
-                check!(parser, data, NEWLINE);
-                consume_list!(parser, data, RCURLY, NEWLINE, fields);
+                consume!(parser, ctx, Variable, v);
+                check!(parser, ctx, LCURLY);
+                check!(parser, ctx, NEWLINE);
+                consume_list!(parser, ctx, RCURLY, NEWLINE, fields);
                 parser.complete(Self::Struct(v, fields))
             }
             (_, t) => miss!(parser, "expected a command keyword (ASSERT | RETURN | LET | ASSERT | PRINT | SHOW | TIME | FN | TYPE | STRUCT), found {t:?}"),
@@ -168,27 +168,27 @@ pub enum Statement {
 }
 
 impl<'a, 'b> Consume<'a, 'b> for Statement {
-    fn consume(parser: Parser, data: &'b StaticParserData<'a>) -> ParseResult<'a, Self> {
+    fn consume(parser: Parser, ctx: &'b ParserContext<'a>) -> ParseResult<'a, Self> {
         measure!("statement");
-        localize_error!(parser, data, Statement, {
-            match parser.first_type(data) {
+        localize_error!(parser, ctx, Statement, {
+            match parser.first_type(ctx) {
                 TokenType::ASSERT => {
                     parser = parser.skip_one();
-                    consume!(parser, data, Expr, expr);
-                    check!(parser, data, COMMA);
-                    consume!(parser, data, LiteralString, msg);
+                    consume!(parser, ctx, Expr, expr);
+                    check!(parser, ctx, COMMA);
+                    consume!(parser, ctx, LiteralString, msg);
                     parser.complete(Statement::Assert(expr, msg))
                 }
                 TokenType::RETURN => {
                     parser = parser.skip_one();
-                    consume!(parser, data, Expr, expr);
+                    consume!(parser, ctx, Expr, expr);
                     parser.complete(Statement::Return(expr))
                 }
                 TokenType::LET => {
                     parser = parser.skip_one();
-                    consume!(parser, data, LValue, lvalue);
-                    check!(parser, data, EQUALS);
-                    consume!(parser, data, Expr, expr);
+                    consume!(parser, ctx, LValue, lvalue);
+                    check!(parser, ctx, EQUALS);
+                    consume!(parser, ctx, Expr, expr);
                     parser.complete(Statement::Let(lvalue, expr))
                 }
                 t => miss!(
@@ -288,9 +288,9 @@ impl Expr {
 
 impl<'a, 'b> Consume<'a, 'b> for Expr {
     #[allow(clippy::too_many_lines)]
-    fn consume(parser: Parser, data: &'b StaticParserData<'a>) -> ParseResult<'a, Self> {
+    fn consume(parser: Parser, ctx: &'b ParserContext<'a>) -> ParseResult<'a, Self> {
         measure!("expr");
-        let next = parser.next(data);
+        let next = parser.next(ctx);
         let (mut parser, mut expr) = match (next.0, next.1.get_type()) {
             (mut parser, op @ (TokenType::Not | TokenType::Sub)) => {
                 measure!("unop");
@@ -317,12 +317,12 @@ impl<'a, 'b> Consume<'a, 'b> for Expr {
                     }
                 }
 
-                consume!(parser, data, Expr, expr);
+                consume!(parser, ctx, Expr, expr);
                 (parser, rearrange_according_to_precedence(op.into(), expr))
             }
             (parser, TokenType::INTVAL) => {
                 let si = next.1.get_index();
-                let s = data.string_map[si];
+                let s = ctx.string_map[si];
                 if let Ok(i) = s.parse::<i64>() {
                     (parser, Expr::Int(i, si))
                 } else {
@@ -331,7 +331,7 @@ impl<'a, 'b> Consume<'a, 'b> for Expr {
             }
             (parser, TokenType::FLOATVAL) => {
                 let si = next.1.get_index();
-                let s = data.string_map[si];
+                let s = ctx.string_map[si];
                 if let Ok(f) = s.parse::<f64>() {
                     if !f.is_finite() {
                         miss!(parser, "expected a finite float, found {f}");
@@ -347,32 +347,32 @@ impl<'a, 'b> Consume<'a, 'b> for Expr {
             (parser, TokenType::FALSE) => (parser, Expr::False),
             (parser, TokenType::VARIABLE) => (parser, Expr::Variable(Variable(next.1.get_index()), Type::None)),
             (mut parser, TokenType::LSQUARE) => {
-                consume_list!(parser, data, RSQUARE, exprs);
+                consume_list!(parser, ctx, RSQUARE, exprs);
                 (parser, Expr::ArrayLiteral(exprs, Type::None))
             }
             (mut parser, TokenType::LPAREN) => {
-                consume!(parser, data, Expr, expr);
-                check!(parser, data, RPAREN);
+                consume!(parser, ctx, Expr, expr);
+                check!(parser, ctx, RPAREN);
                 (parser, Expr::Paren(Box::new(expr)))
             }
             (mut parser, TokenType::IF) => {
-                consume!(parser, data, Expr, expr);
-                check!(parser, data, THEN);
-                consume!(parser, data, Expr, expr2);
-                check!(parser, data, ELSE);
-                consume!(parser, data, Expr, expr3);
+                consume!(parser, ctx, Expr, expr);
+                check!(parser, ctx, THEN);
+                consume!(parser, ctx, Expr, expr2);
+                check!(parser, ctx, ELSE);
+                consume!(parser, ctx, Expr, expr3);
                 (parser, Expr::If(Box::new(expr), Box::new(expr2), Box::new(expr3), Type::None))
             }
             (mut parser, TokenType::ARRAY) => {
-                check!(parser, data, LSQUARE);
-                consume_list!(parser, data, RSQUARE, fields);
-                consume!(parser, data, Expr, expr);
+                check!(parser, ctx, LSQUARE);
+                consume_list!(parser, ctx, RSQUARE, fields);
+                consume!(parser, ctx, Expr, expr);
                 (parser, Expr::ArrayLoop(fields, Box::new(expr), Type::None))
             }
             (mut parser, TokenType::SUM) => {
-                check!(parser, data, LSQUARE);
-                consume_list!(parser, data, RSQUARE, fields);
-                consume!(parser, data, Expr, expr);
+                check!(parser, ctx, LSQUARE);
+                consume_list!(parser, ctx, RSQUARE, fields);
+                consume!(parser, ctx, Expr, expr);
                 (parser, Expr::SumLoop(fields, Box::new(expr), Type::None))
             }
             (_, t) => miss!(parser,
@@ -381,21 +381,21 @@ impl<'a, 'b> Consume<'a, 'b> for Expr {
         };
 
         let (parser, expr) = loop {
-            let (rem_parser, new_expr) = match (parser.next_type(data), &expr) {
+            let (rem_parser, new_expr) = match (parser.next_type(ctx), &expr) {
                 ((mut parser, TokenType::LSQUARE), _) => {
-                    consume_list!(parser, data, RSQUARE, exprs);
+                    consume_list!(parser, ctx, RSQUARE, exprs);
                     (parser, Expr::ArrayIndex(Box::new(expr), exprs, Type::None))
                 }
                 ((mut parser, TokenType::LPAREN), Expr::Variable(s, _)) => {
-                    consume_list!(parser, data, RPAREN, exprs);
+                    consume_list!(parser, ctx, RPAREN, exprs);
                     (parser, Expr::Call(*s, exprs, Type::None))
                 }
                 ((mut parser, TokenType::LCURLY), Expr::Variable(s, _)) => {
-                    consume_list!(parser, data, RCURLY, exprs);
+                    consume_list!(parser, ctx, RCURLY, exprs);
                     (parser, Expr::StructLiteral(*s, exprs, Type::None))
                 }
                 ((mut parser, TokenType::DOT), _) => {
-                    consume!(parser, data, Variable, var);
+                    consume!(parser, ctx, Variable, var);
                     (parser, Expr::Dot(Box::new(expr), var, Type::None))
                 }
                 (
@@ -453,7 +453,7 @@ impl<'a, 'b> Consume<'a, 'b> for Expr {
                         }
                     }
 
-                    consume!(parser, data, Expr, expr2);
+                    consume!(parser, ctx, Expr, expr2);
                     (
                         parser,
                         rearrange_according_to_precedence(expr, op.into(), expr2),
@@ -476,9 +476,9 @@ pub enum LValue {
 }
 
 impl<'a, 'b> Consume<'a, 'b> for LValue {
-    fn consume(parser: Parser, data: &'b StaticParserData<'a>) -> ParseResult<'a, Self> {
+    fn consume(parser: Parser, ctx: &'b ParserContext<'a>) -> ParseResult<'a, Self> {
         measure!("lvalue");
-        let next = parser.next(data);
+        let next = parser.next(ctx);
         let (parser, lv) = match (next.0, next.1.get_type()) {
             (parser, TokenType::VARIABLE) => (parser, LValue::Var(Variable(next.1.get_index()))),
             (_, t) => miss!(
@@ -487,9 +487,9 @@ impl<'a, 'b> Consume<'a, 'b> for LValue {
             ),
         };
 
-        let (parser, lv) = match (parser.next_type(data), &lv) {
+        let (parser, lv) = match (parser.next_type(ctx), &lv) {
             ((mut parser, TokenType::LSQUARE), &LValue::Var(s)) => {
-                consume_list!(parser, data, RSQUARE, args);
+                consume_list!(parser, ctx, RSQUARE, args);
                 (parser, LValue::Array(s, args))
             }
             _ => (parser, lv),
@@ -526,9 +526,9 @@ impl PartialEq for Type {
 }
 
 impl<'a, 'b> Consume<'a, 'b> for Type {
-    fn consume(parser: Parser, data: &'b StaticParserData<'a>) -> ParseResult<'a, Self> {
+    fn consume(parser: Parser, ctx: &'b ParserContext<'a>) -> ParseResult<'a, Self> {
         measure!("type");
-        let next = parser.next(data);
+        let next = parser.next(ctx);
         let (mut parser, mut ty) = match (next.0, next.1.get_type()) {
             (parser, TokenType::VARIABLE) => (parser, Type::Struct(Variable(next.1.get_index()))),
             (parser, TokenType::INT) => (parser, Type::Int),
@@ -541,13 +541,13 @@ impl<'a, 'b> Consume<'a, 'b> for Type {
             ),
         };
 
-        while let (TokenType::LSQUARE, _) = (parser.first_type(data), &ty) {
+        while let (TokenType::LSQUARE, _) = (parser.first_type(ctx), &ty) {
             parser = parser.skip_one();
 
             let mut depth: u8 = 1;
 
             loop {
-                match parser.next_type(data) {
+                match parser.next_type(ctx) {
                     (advanced_parser, TokenType::RSQUARE) => {
                         parser = advanced_parser;
                         break;
@@ -571,12 +571,12 @@ impl<'a, 'b> Consume<'a, 'b> for Type {
 pub struct Binding(pub LValue, pub Type);
 
 impl<'a, 'b> Consume<'a, 'b> for Binding {
-    fn consume(parser: Parser, data: &'b StaticParserData<'a>) -> ParseResult<'a, Self> {
+    fn consume(parser: Parser, ctx: &'b ParserContext<'a>) -> ParseResult<'a, Self> {
         measure!("binding");
-        localize_error!(parser, data, Binding, {
-            consume!(parser, data, LValue, lv);
-            check!(parser, data, COLON);
-            consume!(parser, data, Type, ty);
+        localize_error!(parser, ctx, Binding, {
+            consume!(parser, ctx, LValue, lv);
+            check!(parser, ctx, COLON);
+            consume!(parser, ctx, Type, ty);
             parser.complete(Binding(lv, ty))
         })
     }
@@ -600,16 +600,16 @@ pub fn parse<'a>(
         current_position: 0,
     };
 
-    let data = StaticParserData {
+    let ctx = ParserContext {
         original_tokens: tokens,
         string_map,
         source,
     };
 
-    let data = &data;
+    let ctx = &ctx;
 
-    while !parser.is_empty(data) {
-        let cmd = Cmd::consume(parser, data);
+    while !parser.is_empty(ctx) {
+        let cmd = Cmd::consume(parser, ctx);
 
         match cmd {
             ParseResult::Parsed(moved_parser, cmd) => {
@@ -623,12 +623,12 @@ pub fn parse<'a>(
                 cmds.push(cmd);
             }
             pr => {
-                if let TokenType::NEWLINE = parser.first_type(data) {
+                if let TokenType::NEWLINE = parser.first_type(ctx) {
                     parser = parser.skip_one();
                     continue;
                 }
 
-                if let TokenType::END_OF_FILE = parser.first_type(data) {
+                if let TokenType::END_OF_FILE = parser.first_type(ctx) {
                     break;
                 }
 
@@ -637,7 +637,7 @@ pub fn parse<'a>(
                         error_message: e,
                         position: err_position,
                     } => {
-                        let (line, column) = parser.print_error(data, err_position);
+                        let (line, column) = parser.print_error(ctx, err_position);
                         (e, line, column)
                     }
                     ParseResult::NotParsedErrorPrinted {
