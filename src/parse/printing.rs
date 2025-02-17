@@ -163,7 +163,7 @@ impl CustomDisplay for Expr {
     #[allow(clippy::too_many_lines)]
     fn fmt(&self, f: &mut String, string_map: &[&str]) -> std::fmt::Result {
         match self {
-            Expr::Int(_, i) => {
+            Expr::Int(_, i, _) => {
                 let i = {
                     let i = string_map[*i].trim_start_matches('0');
                     if i.is_empty() {
@@ -179,7 +179,7 @@ impl CustomDisplay for Expr {
                     write!(f, "(IntExpr {i})")
                 }
             }
-            Expr::Float(fl, s_fl) => string_map[*s_fl]
+            Expr::Float(fl, s_fl, _) => string_map[*s_fl]
                 .split_once('.')
                 .map(|(trunc, _)| {
                     let trunc = trunc.trim_start_matches('0');
@@ -201,21 +201,21 @@ impl CustomDisplay for Expr {
                     }
                 })
                 .unwrap(),
-            Expr::True => {
+            Expr::True(_) => {
                 if PRINT_TYPES.with(Cell::get) {
                     write!(f, "(TrueExpr (BoolType))")
                 } else {
                     write!(f, "(TrueExpr)")
                 }
             }
-            Expr::False => {
+            Expr::False(_) => {
                 if PRINT_TYPES.with(Cell::get) {
                     write!(f, "(FalseExpr (BoolType))")
                 } else {
                     write!(f, "(FalseExpr)")
                 }
             }
-            Expr::Void => {
+            Expr::Void(_) => {
                 if PRINT_TYPES.with(Cell::get) {
                     write!(f, "(VoidExpr (VoidType))")
                 } else {
@@ -293,7 +293,7 @@ impl CustomDisplay for LValue {
 impl CustomDisplay for Type {
     fn fmt(&self, f: &mut String, string_map: &[&str]) -> std::fmt::Result {
         match self {
-            Type::Struct(Variable(s)) => {
+            Type::Struct(Variable(s, _)) => {
                 f.write_str("(StructType ")?;
                 f.write_str(string_map[*s])?;
                 f.write_char(')')

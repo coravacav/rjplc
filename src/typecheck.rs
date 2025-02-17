@@ -5,7 +5,9 @@ use anyhow::{anyhow, bail, ensure, Context, Result};
 
 use crate::{
     lex::TokenType,
-    parse::{Binding, Cmd, Expr, Field, LValue, LoopField, Op, Statement, Type, Variable},
+    parse::{
+        Binding, Cmd, Expr, Field, LValue, LoopField, Op, SourceInfo, Statement, Type, Variable,
+    },
     PRINT_TYPES,
 };
 
@@ -39,10 +41,10 @@ impl<'a, 'b> Ctx<'a, 'b> {
         ctx.structs.insert(
             0,
             vec![
-                Field(Variable(1), Type::Float),
-                Field(Variable(2), Type::Float),
-                Field(Variable(3), Type::Float),
-                Field(Variable(4), Type::Float),
+                Field(Variable(1, SourceInfo::Builtin), Type::Float),
+                Field(Variable(2, SourceInfo::Builtin), Type::Float),
+                Field(Variable(3, SourceInfo::Builtin), Type::Float),
+                Field(Variable(4, SourceInfo::Builtin), Type::Float),
             ],
         );
         debug_assert_eq!(string_map[5], "sqrt");
@@ -163,7 +165,7 @@ impl<'a, 'b> Ctx<'a, 'b> {
 
     fn check_self_referential_struct(&self, ty: &Type) -> Result<()> {
         match ty {
-            Type::Struct(Variable(name)) if !self.structs.contains_key(name) => Err(anyhow!(
+            Type::Struct(Variable(name, _)) if !self.structs.contains_key(name) => Err(anyhow!(
                 "struct definition references nonexistent struct {}",
                 self.string_map[*name]
             )),
@@ -182,7 +184,7 @@ impl TypeFill for Cmd {
     fn typefill(&mut self, ctx: &mut Ctx) -> Result<()> {
         match self {
             Cmd::Show(expr) => expr.typefill(ctx)?,
-            Cmd::Struct(Variable(v), fields) => {
+            Cmd::Struct(Variable(v, _), fields) => {
                 let mut name_check = Vec::with_capacity(fields.len());
 
                 for Field(name, ty) in fields.iter_mut() {
@@ -198,8 +200,8 @@ impl TypeFill for Cmd {
             Cmd::Let(lv, expr) => {
                 let expr_type = expr.typefill_get_type(ctx)?;
                 match (lv, &expr_type) {
-                    (LValue::Var(Variable(v)), _) => ctx.insert_var(*v, expr_type)?,
-                    (LValue::Array(Variable(v), dim_bindings), Type::Array(_, dims)) => {
+                    (LValue::Var(Variable(v, _)), _) => ctx.insert_var(*v, expr_type)?,
+                    (LValue::Array(Variable(v, _), dim_bindings), Type::Array(_, dims)) => {
                         ensure!(
                             *dims as usize == dim_bindings.len(),
                             "cannot bind array length bindings {:?} to array of dimension {}",
@@ -209,14 +211,14 @@ impl TypeFill for Cmd {
 
                         ctx.insert_var(*v, expr_type)?;
 
-                        for Variable(bind) in dim_bindings {
+                        for Variable(bind, _) in dim_bindings {
                             ctx.insert_var(*bind, Type::Int)?;
                         }
                     }
                     (lv, expr_type) => bail!("binding mismatch! {:?} {:?}", lv, expr_type),
                 }
             }
-            Cmd::Fn(Variable(v), bindings, ty, stmts) => {
+            Cmd::Fn(Variable(v, _), bindings, ty, stmts) => {
                 ctx.insert_fn(
                     *v,
                     (
@@ -227,11 +229,11 @@ impl TypeFill for Cmd {
 
                 for Binding(lv, ty) in bindings.iter() {
                     match lv {
-                        LValue::Var(Variable(v)) => ctx.insert_temporary_var(*v, ty.clone())?,
-                        LValue::Array(Variable(v), dim_bindings) => {
+                        LValue::Var(Variable(v, _)) => ctx.insert_temporary_var(*v, ty.clone())?,
+                        LValue::Array(Variable(v, _), dim_bindings) => {
                             ctx.insert_temporary_var(*v, ty.clone())?;
 
-                            for Variable(bind) in dim_bindings {
+                            for Variable(bind, _) in dim_bindings {
                                 ctx.insert_temporary_var(*bind, Type::Int)?;
                             }
                         }
@@ -263,11 +265,11 @@ impl TypeFill for Cmd {
                         Statement::Let(lv, expr) => {
                             let expr_type = expr.typefill_get_type(ctx)?;
                             match (lv, &expr_type) {
-                                (LValue::Var(Variable(v)), _) => {
+                                (LValue::Var(Variable(v, _)), _) => {
                                     ctx.insert_temporary_var(*v, expr_type)?;
                                 }
                                 (
-                                    LValue::Array(Variable(v), dim_bindings),
+                                    LValue::Array(Variable(v, _), dim_bindings),
                                     Type::Array(_, dims),
                                 ) => {
                                     ensure!(
@@ -279,7 +281,7 @@ impl TypeFill for Cmd {
 
                                     ctx.insert_temporary_var(*v, expr_type)?;
 
-                                    for Variable(bind) in dim_bindings {
+                                    for Variable(bind, _) in dim_bindings {
                                         ctx.insert_temporary_var(*bind, Type::Int)?;
                                     }
                                 }
@@ -301,16 +303,17 @@ impl TypeFill for Cmd {
             Cmd::Write(expr, _) => {
                 let expr_type = expr.typefill_get_type(ctx)?;
                 match expr_type {
-                    Type::Array(ty, 2) if *ty == Type::Struct(Variable(0)) => {}
+                    Type::Array(ty, 2) if matches!(*ty, Type::Struct(Variable(0, _))) => {}
                     ty => bail!("write takes rgba[,], found {:?}", ty),
                 }
             }
             Cmd::Read(_, lv) => {
                 let dims = 2;
-                let expr_type = Type::Array(Box::new(Type::Struct(Variable(0))), 2);
+                let expr_type =
+                    Type::Array(Box::new(Type::Struct(Variable(0, SourceInfo::Builtin))), 2);
                 match lv {
-                    LValue::Var(Variable(v)) => ctx.insert_var(*v, expr_type)?,
-                    LValue::Array(Variable(v), dim_bindings) => {
+                    LValue::Var(Variable(v, _)) => ctx.insert_var(*v, expr_type)?,
+                    LValue::Array(Variable(v, _), dim_bindings) => {
                         ensure!(
                             dims == dim_bindings.len(),
                             "cannot bind array length bindings {:?} to array of dimension {}",
@@ -320,7 +323,7 @@ impl TypeFill for Cmd {
 
                         ctx.insert_var(*v, expr_type)?;
 
-                        for Variable(bind) in dim_bindings {
+                        for Variable(bind, _) in dim_bindings {
                             ctx.insert_var(*bind, Type::Int)?;
                         }
                     }
@@ -353,7 +356,11 @@ impl Expr {
 impl TypeFill for Expr {
     fn typefill(&mut self, ctx: &mut Ctx) -> Result<()> {
         match self {
-            Expr::Int(_, _) | Expr::Float(_, _) | Expr::True | Expr::False | Expr::Void => {}
+            Expr::Int(_, _, _)
+            | Expr::Float(_, _, _)
+            | Expr::True(_)
+            | Expr::False(_)
+            | Expr::Void(_) => {}
             Expr::Binop(lhs, op, rhs, ret_ty) => {
                 let lhs_type = lhs.typefill_get_type(ctx)?;
                 let rhs_type = rhs.typefill_get_type(ctx)?;
@@ -453,7 +460,7 @@ impl TypeFill for Expr {
                     1,
                 );
             }
-            Expr::StructLiteral(Variable(v), exprs, ty) => {
+            Expr::StructLiteral(Variable(v, source_info), exprs, ty) => {
                 for expr in exprs.iter_mut() {
                     expr.typefill(ctx)?;
                 }
@@ -462,9 +469,9 @@ impl TypeFill for Expr {
                     bail!("struct of type {} is not defined", ctx.string_map[*v])
                 };
 
-                *ty = Type::Struct(Variable(*v));
+                *ty = Type::Struct(Variable(*v, *source_info));
 
-                for (expr_type, Field(Variable(fv), field_type)) in
+                for (expr_type, Field(Variable(fv, _), field_type)) in
                     exprs.iter().map(Expr::get_type).zip(struct_type.iter())
                 {
                     ensure!(
@@ -476,9 +483,9 @@ impl TypeFill for Expr {
                     );
                 }
             }
-            Expr::Dot(expr, Variable(v), ty) => {
+            Expr::Dot(expr, Variable(v, _), ty) => {
                 let struct_name = match expr.typefill_get_type(ctx)? {
-                    Type::Struct(Variable(struct_name)) => struct_name,
+                    Type::Struct(Variable(struct_name, _)) => struct_name,
                     t => bail!("cannot perform operation `.` on non struct {:?}", t),
                 };
 
@@ -486,7 +493,7 @@ impl TypeFill for Expr {
                     bail!("struct of type {} is not defined", ctx.string_map[*v]);
                 };
 
-                let Some(Field(_, fty)) = fields.iter().find(|Field(Variable(fv), _)| fv == v)
+                let Some(Field(_, fty)) = fields.iter().find(|Field(Variable(fv, _), _)| fv == v)
                 else {
                     bail!(
                         "field {} does not exist on struct of type {}",
@@ -497,7 +504,7 @@ impl TypeFill for Expr {
 
                 *ty = fty.clone();
             }
-            Expr::Call(Variable(v), exprs, ty) => {
+            Expr::Call(Variable(v, _), exprs, ty) => {
                 for expr in exprs.iter_mut() {
                     expr.typefill(ctx)?;
                 }
@@ -556,7 +563,7 @@ impl TypeFill for Expr {
 
                 *ty = true_type;
             }
-            Expr::Variable(Variable(v), ret_ty) => {
+            Expr::Variable(Variable(v, _), ret_ty) => {
                 let Some(ty) = ctx.vars.get(v).or_else(|| ctx.temporary_vars.get(v)) else {
                     bail!("variable {} is undefined", ctx.string_map[*v]);
                 };
@@ -575,14 +582,14 @@ impl TypeFill for Expr {
                     );
                 }
 
-                for LoopField(Variable(lv), le) in fields.iter_mut() {
+                for LoopField(Variable(lv, _), le) in fields.iter_mut() {
                     ctx.insert_var(*lv, le.get_type())?;
                 }
 
                 expr.typefill(ctx)?;
                 *ret_ty = Type::Array(Box::new(expr.get_type()), fields.len() as u8);
 
-                for LoopField(Variable(lv), _) in fields {
+                for LoopField(Variable(lv, _), _) in fields {
                     ctx.vars.remove(lv);
                 }
             }
@@ -598,7 +605,7 @@ impl TypeFill for Expr {
                     );
                 }
 
-                for LoopField(Variable(lv), le) in fields.iter_mut() {
+                for LoopField(Variable(lv, _), le) in fields.iter_mut() {
                     ctx.insert_var(*lv, le.get_type())?;
                 }
 
@@ -611,7 +618,7 @@ impl TypeFill for Expr {
                     ret_ty
                 );
 
-                for LoopField(Variable(lv), _) in fields {
+                for LoopField(Variable(lv, _), _) in fields {
                     ctx.vars.remove(lv);
                 }
             }

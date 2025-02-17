@@ -2,7 +2,7 @@ use colored::Colorize;
 use itertools::Itertools;
 
 use crate::{
-    lex::{input_by_token, Token, TokenType},
+    lex::{input_by_token, InputByToken, Token, TokenType},
     undo_slice_by_cuts, UndoSliceSelection,
 };
 
@@ -20,7 +20,7 @@ pub(crate) enum ParseResult<'a, T> {
         error_message: Box<dyn Fn() -> String + 'a>,
         position: usize,
     },
-    Parsed(Parser, T),
+    Parsed(Parser, T, SourceInfo),
 }
 
 impl<'a, T> ParseResult<'a, T> {
@@ -55,15 +55,17 @@ macro_rules! miss {
 
 macro_rules! consume {
     ($parser:ident, $ctx:ident, $type:ty, $outvar:ident) => {
-        let (advanced_parser, $outvar) = match <$type>::consume($parser, $ctx) {
-            ParseResult::Parsed(parser, t) => {
+        let (advanced_parser, $outvar, source_info) = match <$type>::consume($parser, $ctx) {
+            ParseResult::Parsed(parser, t, source_info) => {
                 debug_assert_ne!($parser.current_position, parser.current_position);
-                (parser, t)
+                (parser, t, source_info)
             }
             pr => return pr.erase(),
         };
 
         $parser = advanced_parser;
+
+        source_info
     };
 }
 
@@ -75,21 +77,24 @@ pub fn consume_list_impl<'a, 'b, T: Consume<'a, 'b> + std::fmt::Debug>(
     delimeter_terminated: bool,
 ) -> ParseResult<'a, Vec<T>> {
     let mut list = vec![];
+
+    let range = SourceInfo::mark_range(&parser);
+
     loop {
-        if let ParseResult::Parsed(parser, ()) = parser.check_skip(ctx, end_token) {
-            return parser.complete(list);
+        if let ParseResult::Parsed(parser, (), _) = parser.check_skip(ctx, end_token) {
+            return parser.complete_range(list, &range);
         }
 
         consume!(parser, ctx, T, t);
         list.push(t);
 
         match parser.first(ctx) {
-            t if t.get_type() == delimeter => parser = parser.skip_one(),
-            t if !delimeter_terminated && t.get_type() == end_token => {
-                return parser.skip_one().complete(list)
+            (t, _) if t.get_type() == delimeter => parser = parser.skip_one(),
+            (t, _) if !delimeter_terminated && t.get_type() == end_token => {
+                return parser.skip_one().complete_range(list, &range);
             }
-            t if delimeter_terminated => miss!(parser, "expected {delimeter:?}, found {t:?}"),
-            t => miss!(
+            (t, _) if delimeter_terminated => miss!(parser, "expected {delimeter:?}, found {t:?}"),
+            (t, _) => miss!(
                 parser,
                 "expected {delimeter:?} or {end_token:?}, found {t:?}"
             ),
@@ -106,7 +111,7 @@ macro_rules! consume_list {
             TokenType::$delimeter,
             $delimeter_terminated,
         ) {
-            ParseResult::Parsed(parser, t) => {
+            ParseResult::Parsed(parser, t, _) => {
                 debug_assert_ne!($parser.current_position, parser.current_position);
                 (parser, t)
             }
@@ -125,12 +130,14 @@ macro_rules! consume_list {
 
 macro_rules! check {
     ($parser:ident, $ctx:ident, $token:tt) => {
-        let advanced_parser = match $parser.check_skip($ctx, TokenType::$token) {
-            ParseResult::Parsed(parser, _) => (parser),
+        let (advanced_parser, source_info) = match $parser.check_skip($ctx, TokenType::$token) {
+            ParseResult::Parsed(parser, _, source_info) => (parser, source_info),
             pr => return pr.erase(),
         };
 
         $parser = advanced_parser;
+
+        source_info
     };
 }
 
@@ -169,8 +176,14 @@ pub(crate) struct ParserContext<'a> {
 }
 
 impl<'a, 'b> Parser {
-    pub fn complete<T>(self, t: T) -> ParseResult<'a, T> {
-        ParseResult::Parsed(self, t)
+    pub fn complete<T>(self, t: T, total_source_slice: SourceInfo) -> ParseResult<'a, T> {
+        ParseResult::Parsed(self, t, total_source_slice)
+    }
+
+    pub fn complete_range<T>(self, t: T, range: &SourceInfoMarker) -> ParseResult<'a, T> {
+        debug_assert_ne!(range.start_index, self.current_position);
+        let range = SourceInfo::Range(range.start_index, self.current_position);
+        ParseResult::Parsed(self, t, range)
     }
 
     pub fn miss<T>(self, report: Box<dyn Fn() -> String + 'a>) -> ParseResult<'a, T> {
@@ -188,8 +201,8 @@ impl<'a, 'b> Parser {
 
     pub fn check_skip(self, ctx: &'b ParserContext<'a>, token: TokenType) -> ParseResult<'a, ()> {
         debug_assert_ne!(token, TokenType::END_OF_FILE);
-        if self.check_one(ctx, token) {
-            ParseResult::Parsed(self.skip_one(), ())
+        if let Some(slice) = self.check_one(ctx, token) {
+            ParseResult::Parsed(self.skip_one(), (), slice)
         } else {
             let first = self.first(ctx);
             ParseResult::NotParsed {
@@ -199,28 +212,30 @@ impl<'a, 'b> Parser {
         }
     }
 
-    pub fn check_one(self, ctx: &ParserContext<'a>, token: TokenType) -> bool {
-        self.first(ctx).get_type() == token
+    pub fn check_one(self, ctx: &ParserContext<'a>, token: TokenType) -> Option<SourceInfo> {
+        let first = self.first(ctx);
+        (first.0.get_type() == token).then_some(first.1)
     }
 
-    pub fn first(self, ctx: &ParserContext<'a>) -> Token {
+    pub fn first(self, ctx: &ParserContext<'a>) -> (Token, SourceInfo) {
         debug_assert!(ctx.original_tokens.get(self.current_position).is_some());
         // SAFETY: EOF is always at the end and we never check for EOF
-        unsafe { *ctx.original_tokens.get_unchecked(self.current_position) }
+        let next = unsafe { *ctx.original_tokens.get_unchecked(self.current_position) };
+
+        (next, SourceInfo::Token(self.current_position))
     }
 
     pub fn first_type(self, ctx: &ParserContext<'a>) -> TokenType {
-        self.first(ctx).get_type()
+        self.first(ctx).0.get_type()
     }
 
-    pub fn next(self, ctx: &ParserContext<'a>) -> (Self, Token) {
-        let next = self.first(ctx);
-        (self.skip_one(), next)
+    pub fn next(self, ctx: &ParserContext<'a>) -> (Self, Token, SourceInfo) {
+        let (next, slice) = self.first(ctx);
+        (self.skip_one(), next, slice)
     }
 
     pub fn next_type(self, ctx: &ParserContext<'a>) -> (Self, TokenType) {
-        let next = self.first_type(ctx);
-        (self.skip_one(), next)
+        (self.skip_one(), self.first_type(ctx))
     }
 
     pub fn is_empty(self, ctx: &ParserContext<'a>) -> bool {
@@ -231,7 +246,7 @@ impl<'a, 'b> Parser {
     pub fn print_error(&self, ctx: &'b ParserContext<'a>, error_position: usize) -> (usize, usize) {
         let current_position = self.current_position;
 
-        let input_by_token = input_by_token(ctx.source, ctx.original_tokens.len());
+        let InputByToken(input_by_token) = input_by_token(ctx.source, ctx.original_tokens.len());
 
         let error_position = if error_position == input_by_token.len() {
             input_by_token.len() - 1
@@ -339,3 +354,37 @@ pub(crate) use consume;
 pub(crate) use consume_list;
 pub(crate) use localize_error;
 pub(crate) use miss;
+
+#[derive(Debug, Clone, Copy)]
+pub enum SourceInfo {
+    Token(usize),
+    Range(usize, usize),
+    // Syntax,
+    Builtin,
+}
+
+impl SourceInfo {
+    /// # Panics
+    #[must_use]
+    pub fn unwrap_token_index(self) -> usize {
+        match self {
+            SourceInfo::Token(t) => t,
+            _ => panic!("Expected token, found {self:?}"),
+        }
+    }
+
+    #[must_use]
+    pub fn mark_range(parser: &Parser) -> SourceInfoMarker {
+        SourceInfoMarker {
+            start_index: parser.current_position,
+        }
+    }
+
+    // pub fn get_string<'a>(&self, input_by_token: &InputByToken<'a>) -> &'a str {
+    //     input_by_token.0[self.0]
+    // }
+}
+
+pub struct SourceInfoMarker {
+    start_index: usize,
+}

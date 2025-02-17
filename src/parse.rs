@@ -11,38 +11,56 @@ use crate::{
     measure,
 };
 
+pub use parser::SourceInfo;
+
 mod parser;
 mod printing;
 #[cfg(test)]
 mod tests;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Variable(pub usize);
+#[derive(Debug, Clone, Copy)]
+pub struct Variable(pub usize, pub SourceInfo);
 
 impl<'a, 'b> Consume<'a, 'b> for Variable {
     fn consume(parser: Parser, ctx: &'b ParserContext<'a>) -> ParseResult<'a, Self> {
         measure!("variable");
-        let (parser, s) = match parser.next(ctx) {
-            (parser, t) if t.get_type() == TokenType::VARIABLE => (parser, t.get_index()),
-            (_, t) => miss!(parser, "expected variable, found {:?}", t),
+        let (parser, s, source_info) = match parser.next(ctx) {
+            (parser, t, source_info) if t.get_type() == TokenType::VARIABLE => {
+                (parser, t.get_index(), source_info)
+            }
+            (_, t, _) => miss!(parser, "expected variable, found {:?}", t),
         };
 
-        parser.complete(Self(s))
+        parser.complete(Self(s, source_info), source_info)
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct LiteralString(usize);
+impl PartialEq for Variable {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct LiteralString(usize, SourceInfo);
 
 impl<'a, 'b> Consume<'a, 'b> for LiteralString {
     fn consume(parser: Parser, ctx: &'b ParserContext<'a>) -> ParseResult<'a, Self> {
         measure!("string_lit");
-        let s = match parser.first(ctx) {
-            t if t.get_type() == TokenType::STRING => t.get_index(),
+        let (s, source_info) = match parser.first(ctx) {
+            (t, source_info) if t.get_type() == TokenType::STRING => (t.get_index(), source_info),
             t => miss!(parser, "expected string, found {t:?}"),
         };
 
-        parser.skip_one().complete(Self(s))
+        parser
+            .skip_one()
+            .complete(Self(s, source_info), source_info)
+    }
+}
+
+impl PartialEq for LiteralString {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
     }
 }
 
@@ -53,10 +71,12 @@ impl<'a, 'b> Consume<'a, 'b> for LoopField {
     fn consume(parser: Parser, ctx: &'b ParserContext<'a>) -> ParseResult<'a, Self> {
         measure!("arraySumField");
         localize_error!(parser, ctx, LoopField, {
+            let range = SourceInfo::mark_range(&parser);
             consume!(parser, ctx, Variable, s);
             check!(parser, ctx, COLON);
             consume!(parser, ctx, Expr, expr);
-            parser.complete(LoopField(s, expr))
+
+            parser.complete_range(LoopField(s, expr), &range)
         })
     }
 }
@@ -68,10 +88,11 @@ impl<'a, 'b> Consume<'a, 'b> for Field {
     fn consume(parser: Parser, ctx: &'b ParserContext<'a>) -> ParseResult<'a, Self> {
         measure!("field");
         localize_error!(parser, ctx, Field, {
+            let range = SourceInfo::mark_range(&parser);
             consume!(parser, ctx, Variable, s);
             check!(parser, ctx, COLON);
             consume!(parser, ctx, Type, ty);
-            parser.complete(Field(s, ty))
+            parser.complete_range(Field(s, ty), &range)
         })
     }
 }
@@ -92,52 +113,53 @@ pub enum Cmd {
 impl<'a, 'b> Consume<'a, 'b> for Cmd {
     fn consume(parser: Parser, ctx: &'b ParserContext<'a>) -> ParseResult<'a, Self> {
         measure!("cmd");
-        match parser.next_type(ctx) {
-            (mut parser, TokenType::READ) => {
+        let range = SourceInfo::mark_range(&parser);
+        let (parser, cmd) = match parser.next_type(ctx) {
+            (mut parser, TokenType::READ)=> {
                 check!(parser, ctx, IMAGE);
                 consume!(parser, ctx, LiteralString, s);
                 check!(parser, ctx, TO);
                 consume!(parser, ctx, LValue, lvalue);
                 check!(parser, ctx, NEWLINE);
-                parser.complete(Self::Read(s, lvalue))
+                (parser, Self::Read(s, lvalue))
             }
-            (mut parser, TokenType::TIME) => {
+            (mut parser, TokenType::TIME)=> {
                 consume!(parser, ctx, Cmd, cmd);
-                parser.complete(Self::Time(Box::new(cmd)))
+                (parser, Self::Time(Box::new(cmd)))
             }
-            (mut parser, TokenType::LET) => {
+            (mut parser, TokenType::LET)=> {
                 consume!(parser, ctx, LValue, lvalue);
                 check!(parser, ctx, EQUALS);
                 consume!(parser, ctx, Expr, expr);
                 check!(parser, ctx, NEWLINE);
-                parser.complete(Self::Let(lvalue, expr))
+                (parser, Self::Let(lvalue, expr))
             }
-            (mut parser, TokenType::ASSERT) => {
+            (mut parser, TokenType::ASSERT)=> {
                 consume!(parser, ctx, Expr, expr);
                 check!(parser, ctx, COMMA);
                 consume!(parser, ctx, LiteralString, s);
                 check!(parser, ctx, NEWLINE);
-                parser.complete(Self::Assert(expr, s))
+                (parser, Self::Assert(expr, s))
             }
-            (mut parser, TokenType::SHOW) => {
+            (mut parser, TokenType::SHOW)=> {
                 consume!(parser, ctx, Expr, expr);
                 check!(parser, ctx, NEWLINE);
-                parser.complete(Self::Show(expr))
+                (parser, Self::Show(expr))
             }
-            (mut parser, TokenType::WRITE) => {
+            (mut parser, TokenType::WRITE)=> {
                 check!(parser, ctx, IMAGE);
                 consume!(parser, ctx, Expr, expr);
                 check!(parser, ctx, TO);
                 consume!(parser, ctx, LiteralString, s);
                 check!(parser, ctx, NEWLINE);
-                parser.complete(Self::Write(expr, s))
+                (parser, Self::Write(expr, s))
             }
-            (mut parser, TokenType::PRINT) => {
+            (mut parser, TokenType::PRINT)=> {
                 consume!(parser, ctx, LiteralString, s);
                 check!(parser, ctx, NEWLINE);
-                parser.complete(Self::Print(s))
+                (parser, Self::Print(s))
             }
-            (mut parser, TokenType::FN) => {
+            (mut parser, TokenType::FN)=> {
                 consume!(parser, ctx, Variable, v);
                 check!(parser, ctx, LPAREN);
                 consume_list!(parser, ctx, RPAREN, bindings);
@@ -146,17 +168,19 @@ impl<'a, 'b> Consume<'a, 'b> for Cmd {
                 check!(parser, ctx, LCURLY);
                 check!(parser, ctx, NEWLINE);
                 consume_list!(parser, ctx, RCURLY, NEWLINE, true, statements);
-                parser.complete(Self::Fn(v, bindings, ty, statements))
+                (parser, Self::Fn(v, bindings, ty, statements))
             }
-            (mut parser, TokenType::STRUCT) => {
+            (mut parser, TokenType::STRUCT)=> {
                 consume!(parser, ctx, Variable, v);
                 check!(parser, ctx, LCURLY);
                 check!(parser, ctx, NEWLINE);
                 consume_list!(parser, ctx, RCURLY, NEWLINE, fields);
-                parser.complete(Self::Struct(v, fields))
+                (parser, Self::Struct(v, fields))
             }
-            (_, t) => miss!(parser, "expected a command keyword (ASSERT | RETURN | LET | ASSERT | PRINT | SHOW | TIME | FN | TYPE | STRUCT), found {t:?}"),
-        }
+            (_, t)=> miss!(parser, "expected a command keyword (ASSERT | RETURN | LET | ASSERT | PRINT | SHOW | TIME | FN | TYPE | STRUCT), found {t:?}"),
+        };
+
+        parser.complete_range(cmd, &range)
     }
 }
 
@@ -170,26 +194,28 @@ pub enum Statement {
 impl<'a, 'b> Consume<'a, 'b> for Statement {
     fn consume(parser: Parser, ctx: &'b ParserContext<'a>) -> ParseResult<'a, Self> {
         measure!("statement");
+
         localize_error!(parser, ctx, Statement, {
+            let range = SourceInfo::mark_range(&parser);
             match parser.first_type(ctx) {
                 TokenType::ASSERT => {
                     parser = parser.skip_one();
                     consume!(parser, ctx, Expr, expr);
                     check!(parser, ctx, COMMA);
                     consume!(parser, ctx, LiteralString, msg);
-                    parser.complete(Statement::Assert(expr, msg))
+                    parser.complete_range(Statement::Assert(expr, msg), &range)
                 }
                 TokenType::RETURN => {
                     parser = parser.skip_one();
                     consume!(parser, ctx, Expr, expr);
-                    parser.complete(Statement::Return(expr))
+                    parser.complete_range(Statement::Return(expr), &range)
                 }
                 TokenType::LET => {
                     parser = parser.skip_one();
                     consume!(parser, ctx, LValue, lvalue);
                     check!(parser, ctx, EQUALS);
                     consume!(parser, ctx, Expr, expr);
-                    parser.complete(Statement::Let(lvalue, expr))
+                    parser.complete_range(Statement::Let(lvalue, expr), &range)
                 }
                 t => miss!(
                     parser,
@@ -200,7 +226,6 @@ impl<'a, 'b> Consume<'a, 'b> for Statement {
     }
 }
 
-#[repr(transparent)]
 #[derive(Debug, Clone, Copy)]
 pub struct Op(pub TokenType);
 
@@ -230,11 +255,11 @@ impl From<TokenType> for Op {
 
 #[derive(Debug, Clone)]
 pub enum Expr {
-    Int(i64, usize),
-    Float(f64, usize),
-    True,
-    False,
-    Void,
+    Int(i64, usize, SourceInfo),
+    Float(f64, usize, SourceInfo),
+    True(SourceInfo),
+    False(SourceInfo),
+    Void(SourceInfo),
     Paren(Box<Expr>),
     // Typed
     Variable(Variable, Type),
@@ -266,10 +291,10 @@ impl Expr {
     #[must_use]
     pub fn get_type(&self) -> Type {
         match self {
-            Expr::Int(_, _) => Type::Int,
-            Expr::Float(_, _) => Type::Float,
-            Expr::Void => Type::Void,
-            Expr::True | Expr::False => Type::Bool,
+            Expr::Int(_, _, _) => Type::Int,
+            Expr::Float(_, _, _) => Type::Float,
+            Expr::Void(_) => Type::Void,
+            Expr::True(_) | Expr::False(_) => Type::Bool,
             Expr::Paren(expr) => expr.get_type(),
             Expr::ArrayLiteral(_, ty)
             | Expr::StructLiteral(_, _, ty)
@@ -291,8 +316,9 @@ impl<'a, 'b> Consume<'a, 'b> for Expr {
     fn consume(parser: Parser, ctx: &'b ParserContext<'a>) -> ParseResult<'a, Self> {
         measure!("expr");
         let next = parser.next(ctx);
-        let (mut parser, mut expr) = match (next.0, next.1.get_type()) {
-            (mut parser, op @ (TokenType::Not | TokenType::Sub)) => {
+        let range = SourceInfo::mark_range(&parser);
+        let (mut parser, mut expr) = match (next.0, next.1.get_type(), next.2) {
+            (mut parser, op @ (TokenType::Not | TokenType::Sub), _) => {
                 measure!("unop");
                 fn rearrange_according_to_precedence(
                     op: Op,
@@ -320,16 +346,16 @@ impl<'a, 'b> Consume<'a, 'b> for Expr {
                 consume!(parser, ctx, Expr, expr);
                 (parser, rearrange_according_to_precedence(op.into(), expr))
             }
-            (parser, TokenType::INTVAL) => {
+            (parser, TokenType::INTVAL, source_info) => {
                 let si = next.1.get_index();
                 let s = ctx.string_map[si];
                 if let Ok(i) = s.parse::<i64>() {
-                    (parser, Expr::Int(i, si))
+                    (parser, Expr::Int(i, si, source_info))
                 } else {
                     miss!(parser, "couldn't parse integer {s}")
                 }
             }
-            (parser, TokenType::FLOATVAL) => {
+            (parser, TokenType::FLOATVAL, source_info) => {
                 let si = next.1.get_index();
                 let s = ctx.string_map[si];
                 if let Ok(f) = s.parse::<f64>() {
@@ -337,25 +363,25 @@ impl<'a, 'b> Consume<'a, 'b> for Expr {
                         miss!(parser, "expected a finite float, found {f}");
                     }
 
-                    (parser, Expr::Float(f, si))
+                    (parser, Expr::Float(f, si, source_info))
                 } else {
                     miss!(parser, "couldn't parse float {s}")
                 }
             }
-            (parser, TokenType::VOID) => (parser, Expr::Void),
-            (parser, TokenType::TRUE) => (parser, Expr::True),
-            (parser, TokenType::FALSE) => (parser, Expr::False),
-            (parser, TokenType::VARIABLE) => (parser, Expr::Variable(Variable(next.1.get_index()), Type::None)),
-            (mut parser, TokenType::LSQUARE) => {
+            (parser, TokenType::VOID, source_info) => (parser, Expr::Void(source_info)),
+            (parser, TokenType::TRUE, source_info) => (parser, Expr::True(source_info)),
+            (parser, TokenType::FALSE, source_info) => (parser, Expr::False(source_info)),
+            (parser, TokenType::VARIABLE, source_info) => (parser, Expr::Variable(Variable(next.1.get_index(), source_info), Type::None)),
+            (mut parser, TokenType::LSQUARE, _) => {
                 consume_list!(parser, ctx, RSQUARE, exprs);
                 (parser, Expr::ArrayLiteral(exprs, Type::None))
             }
-            (mut parser, TokenType::LPAREN) => {
+            (mut parser, TokenType::LPAREN, _) => {
                 consume!(parser, ctx, Expr, expr);
                 check!(parser, ctx, RPAREN);
                 (parser, Expr::Paren(Box::new(expr)))
             }
-            (mut parser, TokenType::IF) => {
+            (mut parser, TokenType::IF, _) => {
                 consume!(parser, ctx, Expr, expr);
                 check!(parser, ctx, THEN);
                 consume!(parser, ctx, Expr, expr2);
@@ -363,19 +389,19 @@ impl<'a, 'b> Consume<'a, 'b> for Expr {
                 consume!(parser, ctx, Expr, expr3);
                 (parser, Expr::If(Box::new(expr), Box::new(expr2), Box::new(expr3), Type::None))
             }
-            (mut parser, TokenType::ARRAY) => {
+            (mut parser, TokenType::ARRAY, _) => {
                 check!(parser, ctx, LSQUARE);
                 consume_list!(parser, ctx, RSQUARE, fields);
                 consume!(parser, ctx, Expr, expr);
                 (parser, Expr::ArrayLoop(fields, Box::new(expr), Type::None))
             }
-            (mut parser, TokenType::SUM) => {
+            (mut parser, TokenType::SUM, _) => {
                 check!(parser, ctx, LSQUARE);
                 consume_list!(parser, ctx, RSQUARE, fields);
                 consume!(parser, ctx, Expr, expr);
                 (parser, Expr::SumLoop(fields, Box::new(expr), Type::None))
             }
-            (_, t) => miss!(parser,
+            (_, t, _) => miss!(parser,
                 "expected start of expression (INTVAL | FLOATVAL | TRUE | FALSE | VARIABLE | LSQUARE | LPAREN | LCURLY), found {t:?}"
             ),
         };
@@ -465,7 +491,7 @@ impl<'a, 'b> Consume<'a, 'b> for Expr {
             expr = new_expr;
         };
 
-        parser.complete(expr)
+        parser.complete_range(expr, &range)
     }
 }
 
@@ -479,8 +505,11 @@ impl<'a, 'b> Consume<'a, 'b> for LValue {
     fn consume(parser: Parser, ctx: &'b ParserContext<'a>) -> ParseResult<'a, Self> {
         measure!("lvalue");
         let next = parser.next(ctx);
+        let range = SourceInfo::mark_range(&parser);
         let (parser, lv) = match (next.0, next.1.get_type()) {
-            (parser, TokenType::VARIABLE) => (parser, LValue::Var(Variable(next.1.get_index()))),
+            (parser, TokenType::VARIABLE) => {
+                (parser, LValue::Var(Variable(next.1.get_index(), next.2)))
+            }
             (_, t) => miss!(
                 parser,
                 "expected start of lvalue (VARIABLE | LCURLY), found {t:?}"
@@ -495,7 +524,7 @@ impl<'a, 'b> Consume<'a, 'b> for LValue {
             _ => (parser, lv),
         };
 
-        parser.complete(lv)
+        parser.complete_range(lv, &range)
     }
 }
 
@@ -528,9 +557,13 @@ impl PartialEq for Type {
 impl<'a, 'b> Consume<'a, 'b> for Type {
     fn consume(parser: Parser, ctx: &'b ParserContext<'a>) -> ParseResult<'a, Self> {
         measure!("type");
+        let range = SourceInfo::mark_range(&parser);
+
         let next = parser.next(ctx);
         let (mut parser, mut ty) = match (next.0, next.1.get_type()) {
-            (parser, TokenType::VARIABLE) => (parser, Type::Struct(Variable(next.1.get_index()))),
+            (parser, TokenType::VARIABLE) => {
+                (parser, Type::Struct(Variable(next.1.get_index(), next.2)))
+            }
             (parser, TokenType::INT) => (parser, Type::Int),
             (parser, TokenType::BOOL) => (parser, Type::Bool),
             (parser, TokenType::VOID) => (parser, Type::Void),
@@ -541,7 +574,7 @@ impl<'a, 'b> Consume<'a, 'b> for Type {
             ),
         };
 
-        while let (TokenType::LSQUARE, _) = (parser.first_type(ctx), &ty) {
+        while let TokenType::LSQUARE = parser.first_type(ctx) {
             parser = parser.skip_one();
 
             let mut depth: u8 = 1;
@@ -563,7 +596,7 @@ impl<'a, 'b> Consume<'a, 'b> for Type {
             ty = Self::Array(Box::new(ty), depth);
         }
 
-        parser.complete(ty)
+        parser.complete_range(ty, &range)
     }
 }
 
@@ -574,10 +607,11 @@ impl<'a, 'b> Consume<'a, 'b> for Binding {
     fn consume(parser: Parser, ctx: &'b ParserContext<'a>) -> ParseResult<'a, Self> {
         measure!("binding");
         localize_error!(parser, ctx, Binding, {
+            let range = SourceInfo::mark_range(&parser);
             consume!(parser, ctx, LValue, lv);
             check!(parser, ctx, COLON);
             consume!(parser, ctx, Type, ty);
-            parser.complete(Binding(lv, ty))
+            parser.complete_range(Binding(lv, ty), &range)
         })
     }
 }
@@ -612,8 +646,7 @@ pub fn parse<'a>(
         let cmd = Cmd::consume(parser, ctx);
 
         match cmd {
-            ParseResult::Parsed(moved_parser, cmd) => {
-                // debug_assert_ne!(moved_parser, parser);
+            ParseResult::Parsed(moved_parser, cmd, _) => {
                 parser = moved_parser;
 
                 tokens_consumed.push(parser.current_position);

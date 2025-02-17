@@ -562,10 +562,12 @@ pub fn lex(str_input: &str) -> Result<(Vec<Token>, Vec<&str>)> {
     Ok((tokens, string_map))
 }
 
+pub struct InputByToken<'a>(pub Vec<&'a str>);
+
 #[allow(clippy::too_many_lines)]
 #[allow(clippy::range_plus_one)]
 #[allow(clippy::must_use_candidate)]
-pub fn input_by_token(str_input: &str, capacity: usize) -> Vec<&str> {
+pub fn input_by_token(str_input: &str, capacity: usize) -> InputByToken<'_> {
     measure!("input_by_token");
     let mut input_by_token = Vec::with_capacity(capacity);
     let mut skip_newlines_at = 0;
@@ -709,7 +711,7 @@ pub fn input_by_token(str_input: &str, capacity: usize) -> Vec<&str> {
         }
     }
 
-    input_by_token
+    InputByToken(input_by_token)
 }
 
 #[test]
