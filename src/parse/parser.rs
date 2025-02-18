@@ -6,11 +6,11 @@ use crate::{
     undo_slice_by_cuts, UndoSliceSelection,
 };
 
-pub(crate) trait Consume<'a, 'b>: Sized {
+pub trait Consume<'a, 'b>: Sized {
     fn consume(parser: Parser, ctx: &'b ParserContext<'a>) -> ParseResult<'a, Self>;
 }
 
-pub(crate) enum ParseResult<'a, T> {
+pub enum ParseResult<'a, T> {
     NotParsedErrorPrinted {
         error_message: Box<dyn Fn() -> String + 'a>,
         line: usize,
@@ -20,7 +20,7 @@ pub(crate) enum ParseResult<'a, T> {
         error_message: Box<dyn Fn() -> String + 'a>,
         position: usize,
     },
-    Parsed(Parser, T, SourceInfo),
+    Parsed(Parser, T),
 }
 
 impl<'a, T> ParseResult<'a, T> {
@@ -55,17 +55,15 @@ macro_rules! miss {
 
 macro_rules! consume {
     ($parser:ident, $ctx:ident, $type:ty, $outvar:ident) => {
-        let (advanced_parser, $outvar, source_info) = match <$type>::consume($parser, $ctx) {
-            ParseResult::Parsed(parser, t, source_info) => {
+        let (advanced_parser, $outvar) = match <$type>::consume($parser, $ctx) {
+            ParseResult::Parsed(parser, t) => {
                 debug_assert_ne!($parser.current_position, parser.current_position);
-                (parser, t, source_info)
+                (parser, t)
             }
             pr => return pr.erase(),
         };
 
         $parser = advanced_parser;
-
-        source_info
     };
 }
 
@@ -78,11 +76,9 @@ pub fn consume_list_impl<'a, 'b, T: Consume<'a, 'b> + std::fmt::Debug>(
 ) -> ParseResult<'a, Vec<T>> {
     let mut list = vec![];
 
-    let range = SourceInfo::mark_range(&parser);
-
     loop {
-        if let ParseResult::Parsed(parser, (), _) = parser.check_skip(ctx, end_token) {
-            return parser.complete_range(list, &range);
+        if let ParseResult::Parsed(parser, ()) = parser.check_skip(ctx, end_token) {
+            return parser.complete(list);
         }
 
         consume!(parser, ctx, T, t);
@@ -91,7 +87,7 @@ pub fn consume_list_impl<'a, 'b, T: Consume<'a, 'b> + std::fmt::Debug>(
         match parser.first(ctx) {
             (t, _) if t.get_type() == delimeter => parser = parser.skip_one(),
             (t, _) if !delimeter_terminated && t.get_type() == end_token => {
-                return parser.skip_one().complete_range(list, &range);
+                return parser.skip_one().complete(list);
             }
             (t, _) if delimeter_terminated => miss!(parser, "expected {delimeter:?}, found {t:?}"),
             (t, _) => miss!(
@@ -111,7 +107,7 @@ macro_rules! consume_list {
             TokenType::$delimeter,
             $delimeter_terminated,
         ) {
-            ParseResult::Parsed(parser, t, _) => {
+            ParseResult::Parsed(parser, t) => {
                 debug_assert_ne!($parser.current_position, parser.current_position);
                 (parser, t)
             }
@@ -130,14 +126,12 @@ macro_rules! consume_list {
 
 macro_rules! check {
     ($parser:ident, $ctx:ident, $token:tt) => {
-        let (advanced_parser, source_info) = match $parser.check_skip($ctx, TokenType::$token) {
-            ParseResult::Parsed(parser, _, source_info) => (parser, source_info),
+        let advanced_parser = match $parser.check_skip($ctx, TokenType::$token) {
+            ParseResult::Parsed(parser, _) => parser,
             pr => return pr.erase(),
         };
 
         $parser = advanced_parser;
-
-        source_info
     };
 }
 
@@ -165,25 +159,19 @@ macro_rules! localize_error {
 }
 
 #[derive(Clone, Copy, PartialEq)]
-pub(crate) struct Parser {
+pub struct Parser {
     pub(crate) current_position: usize,
 }
 
-pub(crate) struct ParserContext<'a> {
+pub struct ParserContext<'a> {
     pub(crate) original_tokens: &'a [Token],
     pub(crate) string_map: &'a [&'a str],
     pub(crate) source: &'a str,
 }
 
 impl<'a, 'b> Parser {
-    pub fn complete<T>(self, t: T, total_source_slice: SourceInfo) -> ParseResult<'a, T> {
-        ParseResult::Parsed(self, t, total_source_slice)
-    }
-
-    pub fn complete_range<T>(self, t: T, range: &SourceInfoMarker) -> ParseResult<'a, T> {
-        debug_assert_ne!(range.start_index, self.current_position);
-        let range = SourceInfo::Range(range.start_index, self.current_position);
-        ParseResult::Parsed(self, t, range)
+    pub fn complete<T>(self, t: T) -> ParseResult<'a, T> {
+        ParseResult::Parsed(self, t)
     }
 
     pub fn miss<T>(self, report: Box<dyn Fn() -> String + 'a>) -> ParseResult<'a, T> {
@@ -201,8 +189,8 @@ impl<'a, 'b> Parser {
 
     pub fn check_skip(self, ctx: &'b ParserContext<'a>, token: TokenType) -> ParseResult<'a, ()> {
         debug_assert_ne!(token, TokenType::END_OF_FILE);
-        if let Some(slice) = self.check_one(ctx, token) {
-            ParseResult::Parsed(self.skip_one(), (), slice)
+        if self.check_one(ctx, token).is_some() {
+            ParseResult::Parsed(self.skip_one(), ())
         } else {
             let first = self.first(ctx);
             ParseResult::NotParsed {
@@ -212,24 +200,24 @@ impl<'a, 'b> Parser {
         }
     }
 
-    pub fn check_one(self, ctx: &ParserContext<'a>, token: TokenType) -> Option<SourceInfo> {
+    pub fn check_one(self, ctx: &ParserContext<'a>, token: TokenType) -> Option<Span> {
         let first = self.first(ctx);
         (first.0.get_type() == token).then_some(first.1)
     }
 
-    pub fn first(self, ctx: &ParserContext<'a>) -> (Token, SourceInfo) {
+    pub fn first(self, ctx: &ParserContext<'a>) -> (Token, Span) {
         debug_assert!(ctx.original_tokens.get(self.current_position).is_some());
         // SAFETY: EOF is always at the end and we never check for EOF
         let next = unsafe { *ctx.original_tokens.get_unchecked(self.current_position) };
 
-        (next, SourceInfo::Token(self.current_position))
+        (next, Span::Token(self.current_position))
     }
 
     pub fn first_type(self, ctx: &ParserContext<'a>) -> TokenType {
         self.first(ctx).0.get_type()
     }
 
-    pub fn next(self, ctx: &ParserContext<'a>) -> (Self, Token, SourceInfo) {
+    pub fn next(self, ctx: &ParserContext<'a>) -> (Self, Token, Span) {
         let (next, slice) = self.first(ctx);
         (self.skip_one(), next, slice)
     }
@@ -356,27 +344,93 @@ pub(crate) use localize_error;
 pub(crate) use miss;
 
 #[derive(Debug, Clone, Copy)]
-pub enum SourceInfo {
+pub enum Span {
     Token(usize),
     Range(usize, usize),
     // Syntax,
     Builtin,
 }
 
-impl SourceInfo {
+impl Span {
     /// # Panics
     #[must_use]
     pub fn unwrap_token_index(self) -> usize {
         match self {
-            SourceInfo::Token(t) => t,
+            Span::Token(t) => t,
             _ => panic!("Expected token, found {self:?}"),
         }
     }
 
     #[must_use]
-    pub fn mark_range(parser: &Parser) -> SourceInfoMarker {
-        SourceInfoMarker {
-            start_index: parser.current_position,
+    pub fn mark_range(parser: &Parser) -> SpanMarker {
+        SpanMarker {
+            marked_index: parser.current_position,
+        }
+    }
+
+    #[must_use]
+    pub fn extend_back(self, count: usize) -> Self {
+        match self {
+            Span::Token(t) => Span::Range(t - count, t),
+            Span::Range(start, end) => Span::Range(start - count, end),
+            Span::Builtin => unreachable!(),
+        }
+    }
+
+    #[must_use]
+    pub fn extend_forward(self, count: usize) -> Self {
+        match self {
+            Span::Token(t) => Span::Range(t, t + count),
+            Span::Range(start, end) => Span::Range(start, end + count),
+            Span::Builtin => unreachable!(),
+        }
+    }
+
+    #[must_use]
+    pub fn width(self) -> usize {
+        match self {
+            Span::Token(t) => t,
+            Span::Range(start, end) => end - start,
+            Span::Builtin => unreachable!(),
+        }
+    }
+
+    #[must_use]
+    pub fn start(self) -> usize {
+        match self {
+            Span::Token(t) => t,
+            Span::Range(start, _) => start,
+            Span::Builtin => unreachable!(),
+        }
+    }
+
+    #[must_use]
+    pub fn end(self) -> usize {
+        match self {
+            Span::Token(t) => t,
+            Span::Range(_, end) => end,
+            Span::Builtin => unreachable!(),
+        }
+    }
+
+    // Almost always returns a range
+    #[must_use]
+    pub fn ensure_contains(self, other: impl Into<Span>) -> Span {
+        let other = other.into();
+        match (self, other) {
+            (Span::Token(t), Span::Token(o)) if t < o => Span::Range(t, o),
+            (Span::Token(t), Span::Token(o)) if t > o => Span::Range(o, t),
+            (Span::Token(t), Span::Token(_)) => Span::Token(t),
+            (Span::Token(t), Span::Range(o, e)) if t < o => Span::Range(t, e),
+            (Span::Token(t), Span::Range(o, e)) if t > e => Span::Range(o, t),
+            (Span::Range(s, e), Span::Token(o)) if e < o => Span::Range(s, o),
+            (Span::Range(s, e), Span::Token(o)) if s > o => Span::Range(o, e),
+            (Span::Range(s, e), Span::Range(o, f)) if s < o && e > f => Span::Range(s, e),
+            (Span::Range(s, e), Span::Range(o, f)) if s < o && e < f => Span::Range(s, f),
+            (Span::Range(s, e), Span::Range(o, f)) if s > o && e > f => Span::Range(o, e),
+            (Span::Range(s, e), Span::Range(o, f)) if s > o && e < f => Span::Range(o, f),
+            (Span::Range(s, e), Span::Range(_, _)) => Span::Range(s, e),
+            _ => todo!("{:?} {:?}", self, other),
         }
     }
 
@@ -385,6 +439,23 @@ impl SourceInfo {
     // }
 }
 
-pub struct SourceInfoMarker {
-    start_index: usize,
+#[derive(Debug, Clone, Copy)]
+pub struct SpanMarker {
+    marked_index: usize,
+}
+
+impl SpanMarker {
+    pub fn finish(self, end: SpanMarker) -> Span {
+        if self.marked_index == end.marked_index {
+            Span::Token(self.marked_index)
+        } else {
+            Span::Range(self.marked_index, end.marked_index)
+        }
+    }
+}
+
+impl From<SpanMarker> for Span {
+    fn from(marker: SpanMarker) -> Self {
+        Span::Token(marker.marked_index)
+    }
 }

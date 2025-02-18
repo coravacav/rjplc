@@ -11,7 +11,7 @@ use crate::{
     measure,
 };
 
-pub use parser::SourceInfo;
+pub use parser::Span;
 
 mod parser;
 mod printing;
@@ -19,19 +19,19 @@ mod printing;
 mod tests;
 
 #[derive(Debug, Clone, Copy)]
-pub struct Variable(pub usize, pub SourceInfo);
+pub struct Variable(pub usize, pub Span);
 
 impl<'a, 'b> Consume<'a, 'b> for Variable {
     fn consume(parser: Parser, ctx: &'b ParserContext<'a>) -> ParseResult<'a, Self> {
         measure!("variable");
-        let (parser, s, source_info) = match parser.next(ctx) {
-            (parser, t, source_info) if t.get_type() == TokenType::VARIABLE => {
-                (parser, t.get_index(), source_info)
+        let (parser, s, span) = match parser.next(ctx) {
+            (parser, t, span) if t.get_type() == TokenType::VARIABLE => {
+                (parser, t.get_index(), span)
             }
             (_, t, _) => miss!(parser, "expected variable, found {:?}", t),
         };
 
-        parser.complete(Self(s, source_info), source_info)
+        parser.complete(Self(s, span))
     }
 }
 
@@ -42,19 +42,17 @@ impl PartialEq for Variable {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct LiteralString(usize, SourceInfo);
+pub struct LiteralString(usize, Span);
 
 impl<'a, 'b> Consume<'a, 'b> for LiteralString {
     fn consume(parser: Parser, ctx: &'b ParserContext<'a>) -> ParseResult<'a, Self> {
         measure!("string_lit");
-        let (s, source_info) = match parser.first(ctx) {
-            (t, source_info) if t.get_type() == TokenType::STRING => (t.get_index(), source_info),
+        let (s, span) = match parser.first(ctx) {
+            (t, span) if t.get_type() == TokenType::STRING => (t.get_index(), span),
             t => miss!(parser, "expected string, found {t:?}"),
         };
 
-        parser
-            .skip_one()
-            .complete(Self(s, source_info), source_info)
+        parser.skip_one().complete(Self(s, span))
     }
 }
 
@@ -71,12 +69,11 @@ impl<'a, 'b> Consume<'a, 'b> for LoopField {
     fn consume(parser: Parser, ctx: &'b ParserContext<'a>) -> ParseResult<'a, Self> {
         measure!("arraySumField");
         localize_error!(parser, ctx, LoopField, {
-            let range = SourceInfo::mark_range(&parser);
             consume!(parser, ctx, Variable, s);
             check!(parser, ctx, COLON);
             consume!(parser, ctx, Expr, expr);
 
-            parser.complete_range(LoopField(s, expr), &range)
+            parser.complete(LoopField(s, expr))
         })
     }
 }
@@ -88,32 +85,51 @@ impl<'a, 'b> Consume<'a, 'b> for Field {
     fn consume(parser: Parser, ctx: &'b ParserContext<'a>) -> ParseResult<'a, Self> {
         measure!("field");
         localize_error!(parser, ctx, Field, {
-            let range = SourceInfo::mark_range(&parser);
             consume!(parser, ctx, Variable, s);
             check!(parser, ctx, COLON);
             consume!(parser, ctx, Type, ty);
-            parser.complete_range(Field(s, ty), &range)
+            parser.complete(Field(s, ty))
         })
     }
 }
 
 #[derive(Debug, Clone)]
-pub enum Cmd {
+pub enum CommandKind {
     Read(LiteralString, LValue),
     Write(Expr, LiteralString),
     Let(LValue, Expr),
     Assert(Expr, LiteralString),
     Print(LiteralString),
     Show(Expr),
-    Time(Box<Cmd>),
+    Time(Box<Command>),
     Fn(Variable, Vec<Binding>, Type, Vec<Statement>),
     Struct(Variable, Vec<Field>),
 }
 
-impl<'a, 'b> Consume<'a, 'b> for Cmd {
+impl CommandKind {
+    #[must_use]
+    #[allow(clippy::wrong_self_convention)]
+    fn to_cmd(self, span: Span) -> Command {
+        Command { kind: self, span }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Command {
+    pub kind: CommandKind,
+    pub span: Span,
+}
+
+impl From<Command> for CommandKind {
+    fn from(val: Command) -> Self {
+        val.kind
+    }
+}
+
+impl<'a, 'b> Consume<'a, 'b> for Command {
     fn consume(parser: Parser, ctx: &'b ParserContext<'a>) -> ParseResult<'a, Self> {
         measure!("cmd");
-        let range = SourceInfo::mark_range(&parser);
+        let start = Span::mark_range(&parser);
         let (parser, cmd) = match parser.next_type(ctx) {
             (mut parser, TokenType::READ)=> {
                 check!(parser, ctx, IMAGE);
@@ -121,30 +137,30 @@ impl<'a, 'b> Consume<'a, 'b> for Cmd {
                 check!(parser, ctx, TO);
                 consume!(parser, ctx, LValue, lvalue);
                 check!(parser, ctx, NEWLINE);
-                (parser, Self::Read(s, lvalue))
+                (parser, CommandKind::Read(s, lvalue))
             }
             (mut parser, TokenType::TIME)=> {
-                consume!(parser, ctx, Cmd, cmd);
-                (parser, Self::Time(Box::new(cmd)))
+                consume!(parser, ctx, Command, cmd);
+                (parser, CommandKind::Time(Box::new(cmd)))
             }
             (mut parser, TokenType::LET)=> {
                 consume!(parser, ctx, LValue, lvalue);
                 check!(parser, ctx, EQUALS);
                 consume!(parser, ctx, Expr, expr);
                 check!(parser, ctx, NEWLINE);
-                (parser, Self::Let(lvalue, expr))
+                (parser, CommandKind::Let(lvalue, expr))
             }
             (mut parser, TokenType::ASSERT)=> {
                 consume!(parser, ctx, Expr, expr);
                 check!(parser, ctx, COMMA);
                 consume!(parser, ctx, LiteralString, s);
                 check!(parser, ctx, NEWLINE);
-                (parser, Self::Assert(expr, s))
+                (parser, CommandKind::Assert(expr, s))
             }
             (mut parser, TokenType::SHOW)=> {
                 consume!(parser, ctx, Expr, expr);
                 check!(parser, ctx, NEWLINE);
-                (parser, Self::Show(expr))
+                (parser, CommandKind::Show(expr))
             }
             (mut parser, TokenType::WRITE)=> {
                 check!(parser, ctx, IMAGE);
@@ -152,12 +168,12 @@ impl<'a, 'b> Consume<'a, 'b> for Cmd {
                 check!(parser, ctx, TO);
                 consume!(parser, ctx, LiteralString, s);
                 check!(parser, ctx, NEWLINE);
-                (parser, Self::Write(expr, s))
+                (parser, CommandKind::Write(expr, s))
             }
             (mut parser, TokenType::PRINT)=> {
                 consume!(parser, ctx, LiteralString, s);
                 check!(parser, ctx, NEWLINE);
-                (parser, Self::Print(s))
+                (parser, CommandKind::Print(s))
             }
             (mut parser, TokenType::FN)=> {
                 consume!(parser, ctx, Variable, v);
@@ -168,60 +184,86 @@ impl<'a, 'b> Consume<'a, 'b> for Cmd {
                 check!(parser, ctx, LCURLY);
                 check!(parser, ctx, NEWLINE);
                 consume_list!(parser, ctx, RCURLY, NEWLINE, true, statements);
-                (parser, Self::Fn(v, bindings, ty, statements))
+                (parser, CommandKind::Fn(v, bindings, ty, statements))
             }
             (mut parser, TokenType::STRUCT)=> {
                 consume!(parser, ctx, Variable, v);
                 check!(parser, ctx, LCURLY);
                 check!(parser, ctx, NEWLINE);
                 consume_list!(parser, ctx, RCURLY, NEWLINE, fields);
-                (parser, Self::Struct(v, fields))
+                (parser, CommandKind::Struct(v, fields))
             }
             (_, t)=> miss!(parser, "expected a command keyword (ASSERT | RETURN | LET | ASSERT | PRINT | SHOW | TIME | FN | TYPE | STRUCT), found {t:?}"),
         };
 
-        parser.complete_range(cmd, &range)
+        let end = Span::mark_range(&parser);
+        parser.complete(cmd.to_cmd(start.finish(end)))
     }
 }
 
 #[derive(Debug, Clone)]
-pub enum Statement {
+pub enum StatementKind {
     Let(LValue, Expr),
     Assert(Expr, LiteralString),
     Return(Expr),
 }
+
+
+impl StatementKind {
+    #[allow(clippy::wrong_self_convention)]
+    fn to_stmt(self, span: Span) -> Statement {
+        Statement { kind: self, span }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Statement {
+    pub kind: StatementKind,
+    pub span: Span,
+}
+
+impl From<Statement> for StatementKind {
+    fn from(val: Statement) -> Self {
+        val.kind
+    }
+}
+
 
 impl<'a, 'b> Consume<'a, 'b> for Statement {
     fn consume(parser: Parser, ctx: &'b ParserContext<'a>) -> ParseResult<'a, Self> {
         measure!("statement");
 
         localize_error!(parser, ctx, Statement, {
-            let range = SourceInfo::mark_range(&parser);
-            match parser.first_type(ctx) {
+            let start = Span::mark_range(&parser);
+            let statement = match parser.first_type(ctx) {
                 TokenType::ASSERT => {
                     parser = parser.skip_one();
                     consume!(parser, ctx, Expr, expr);
                     check!(parser, ctx, COMMA);
                     consume!(parser, ctx, LiteralString, msg);
-                    parser.complete_range(Statement::Assert(expr, msg), &range)
+                    StatementKind::Assert(expr, msg)
                 }
                 TokenType::RETURN => {
                     parser = parser.skip_one();
                     consume!(parser, ctx, Expr, expr);
-                    parser.complete_range(Statement::Return(expr), &range)
+                    StatementKind::Return(expr)
                 }
                 TokenType::LET => {
                     parser = parser.skip_one();
                     consume!(parser, ctx, LValue, lvalue);
                     check!(parser, ctx, EQUALS);
                     consume!(parser, ctx, Expr, expr);
-                    parser.complete_range(Statement::Let(lvalue, expr), &range)
+                    StatementKind::Let(lvalue, expr)
                 }
                 t => miss!(
                     parser,
                     "expected a start of statement (ASSERT | RETURN | LET), found {t:?}"
                 ),
-            }
+            };
+
+            let end = Span::mark_range(&parser);
+
+            parser.complete(statement.to_stmt(start.finish(end)))
         })
     }
 }
@@ -254,12 +296,12 @@ impl From<TokenType> for Op {
 }
 
 #[derive(Debug, Clone)]
-pub enum Expr {
-    Int(i64, usize, SourceInfo),
-    Float(f64, usize, SourceInfo),
-    True(SourceInfo),
-    False(SourceInfo),
-    Void(SourceInfo),
+pub enum ExprKind {
+    Int(i64, usize),
+    Float(f64, usize),
+    True,
+    False,
+    Void,
     Paren(Box<Expr>),
     // Typed
     Variable(Variable, Type),
@@ -275,38 +317,59 @@ pub enum Expr {
     SumLoop(Vec<LoopField>, Box<Expr>, Type),
 }
 
+impl ExprKind {
+    #[allow(clippy::wrong_self_convention)]
+    fn to_expr(self, span: Span) -> Expr {
+        Expr { kind: self, span }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Expr {
+    pub kind: ExprKind,
+    pub span: Span,
+}
+
+impl From<Expr> for ExprKind {
+    fn from(val: Expr) -> Self {
+        val.kind
+    }
+}
+
 impl Expr {
     const UNOP_PRECEDENCE: u8 = 6;
 
     const fn precedence(&self) -> u8 {
-        match self {
-            Expr::ArrayIndex(_, _, _) => 7,
-            Expr::Unop(_, _, _) => Self::UNOP_PRECEDENCE,
-            Expr::Binop(_, op, _, _) => op.precedence(),
-            Expr::If(_, _, _, _) | Expr::ArrayLoop(_, _, _) | Expr::SumLoop(_, _, _) => 1,
+        match self.kind {
+            ExprKind::ArrayIndex(_, _, _) => 7,
+            ExprKind::Unop(_, _, _) => Self::UNOP_PRECEDENCE,
+            ExprKind::Binop(_, op, _, _) => op.precedence(),
+            ExprKind::If(_, _, _, _)
+            | ExprKind::ArrayLoop(_, _, _)
+            | ExprKind::SumLoop(_, _, _) => 1,
             _ => u8::MAX,
         }
     }
 
     #[must_use]
     pub fn get_type(&self) -> Type {
-        match self {
-            Expr::Int(_, _, _) => Type::Int,
-            Expr::Float(_, _, _) => Type::Float,
-            Expr::Void(_) => Type::Void,
-            Expr::True(_) | Expr::False(_) => Type::Bool,
-            Expr::Paren(expr) => expr.get_type(),
-            Expr::ArrayLiteral(_, ty)
-            | Expr::StructLiteral(_, _, ty)
-            | Expr::ArrayLoop(_, _, ty)
-            | Expr::SumLoop(_, _, ty)
-            | Expr::Dot(_, _, ty)
-            | Expr::Binop(_, _, _, ty)
-            | Expr::Unop(_, _, ty)
-            | Expr::Variable(_, ty)
-            | Expr::Call(_, _, ty)
-            | Expr::If(_, _, _, ty)
-            | Expr::ArrayIndex(_, _, ty) => ty.clone(),
+        match &self.kind {
+            ExprKind::Int(_, _) => TypeKind::Int.to_type(self.span),
+            ExprKind::Float(_, _) => TypeKind::Float.to_type(self.span),
+            ExprKind::Void => TypeKind::Void.to_type(self.span),
+            ExprKind::True | ExprKind::False => TypeKind::Bool.to_type(self.span),
+            ExprKind::Paren(expr) => expr.get_type(),
+            ExprKind::ArrayLiteral(_, ty)
+            | ExprKind::StructLiteral(_, _, ty)
+            | ExprKind::ArrayLoop(_, _, ty)
+            | ExprKind::SumLoop(_, _, ty)
+            | ExprKind::Dot(_, _, ty)
+            | ExprKind::Binop(_, _, _, ty)
+            | ExprKind::Unop(_, _, ty)
+            | ExprKind::Variable(_, ty)
+            | ExprKind::Call(_, _, ty)
+            | ExprKind::If(_, _, _, ty)
+            | ExprKind::ArrayIndex(_, _, ty) => ty.kind.clone().to_type(self.span),
         }
     }
 }
@@ -316,7 +379,7 @@ impl<'a, 'b> Consume<'a, 'b> for Expr {
     fn consume(parser: Parser, ctx: &'b ParserContext<'a>) -> ParseResult<'a, Self> {
         measure!("expr");
         let next = parser.next(ctx);
-        let range = SourceInfo::mark_range(&parser);
+        let start = Span::mark_range(&parser);
         let (mut parser, mut expr) = match (next.0, next.1.get_type(), next.2) {
             (mut parser, op @ (TokenType::Not | TokenType::Sub), _) => {
                 measure!("unop");
@@ -325,37 +388,45 @@ impl<'a, 'b> Consume<'a, 'b> for Expr {
                     right_expr: Expr,
                 ) -> Expr {
                     if Expr::UNOP_PRECEDENCE < right_expr.precedence() {
-                        Expr::Unop(op, Box::new(right_expr), Type::None)
+                        let expr_span = right_expr.span;
+                        ExprKind::Unop(op, Box::new(right_expr), Type::NONE).to_expr(expr_span.extend_back(1))
+                    } else if let ExprKind::Binop(mut right_expr_left, c2, right_expr_right, _) = right_expr.kind {
+                            let left_expr_span = right_expr_left.span;
+                            let right_expr_span = right_expr_right.span;
+
+                            ExprKind::Binop(
+                            {
+                                // reuse the allocation from right_expr_left 
+                                *right_expr_left = rearrange_according_to_precedence(op, *right_expr_left);
+                                right_expr_left
+                            },
+                            c2,
+                            right_expr_right,
+                            Type::NONE,
+                        ).to_expr(Span::Range(
+                            left_expr_span.start(),
+                            right_expr_span.end(),
+                        ))
+                    
                     } else {
-                        match right_expr {
-                            Expr::Binop(mut right_expr_left, c2, right_expr_right, _) => Expr::Binop(
-                                {
-                                    // reuxe the allocation from right_expr_left 
-                                    *right_expr_left = rearrange_according_to_precedence(op,*right_expr_left);
-                                    right_expr_left
-                                },
-                                c2,
-                                right_expr_right,
-                                Type::None,
-                            ),
-                            expr => Expr::Unop(op, Box::new(expr), Type::None),
-                        }
+                        let expr_span = right_expr.span;
+                        ExprKind::Unop(op, Box::new(right_expr), Type::NONE).to_expr(expr_span.extend_back(1))
                     }
                 }
 
                 consume!(parser, ctx, Expr, expr);
                 (parser, rearrange_according_to_precedence(op.into(), expr))
             }
-            (parser, TokenType::INTVAL, source_info) => {
+            (parser, TokenType::INTVAL, span) => {
                 let si = next.1.get_index();
                 let s = ctx.string_map[si];
                 if let Ok(i) = s.parse::<i64>() {
-                    (parser, Expr::Int(i, si, source_info))
+                    (parser, ExprKind::Int(i, si).to_expr(span))
                 } else {
                     miss!(parser, "couldn't parse integer {s}")
                 }
             }
-            (parser, TokenType::FLOATVAL, source_info) => {
+            (parser, TokenType::FLOATVAL, span) => {
                 let si = next.1.get_index();
                 let s = ctx.string_map[si];
                 if let Ok(f) = s.parse::<f64>() {
@@ -363,23 +434,25 @@ impl<'a, 'b> Consume<'a, 'b> for Expr {
                         miss!(parser, "expected a finite float, found {f}");
                     }
 
-                    (parser, Expr::Float(f, si, source_info))
+                    (parser, ExprKind::Float(f, si).to_expr(span))
                 } else {
                     miss!(parser, "couldn't parse float {s}")
                 }
             }
-            (parser, TokenType::VOID, source_info) => (parser, Expr::Void(source_info)),
-            (parser, TokenType::TRUE, source_info) => (parser, Expr::True(source_info)),
-            (parser, TokenType::FALSE, source_info) => (parser, Expr::False(source_info)),
-            (parser, TokenType::VARIABLE, source_info) => (parser, Expr::Variable(Variable(next.1.get_index(), source_info), Type::None)),
+            (parser, TokenType::VOID, span) => (parser, ExprKind::Void.to_expr(span)),
+            (parser, TokenType::TRUE, span) => (parser, ExprKind::True.to_expr(span)),
+            (parser, TokenType::FALSE, span) => (parser, ExprKind::False.to_expr(span)),
+            (parser, TokenType::VARIABLE, span) => (parser, ExprKind::Variable(Variable(next.1.get_index(), span), Type::NONE).to_expr(span)),
             (mut parser, TokenType::LSQUARE, _) => {
                 consume_list!(parser, ctx, RSQUARE, exprs);
-                (parser, Expr::ArrayLiteral(exprs, Type::None))
+                let end = Span::mark_range(&parser);
+                (parser, ExprKind::ArrayLiteral(exprs, Type::NONE).to_expr(start.finish(end)))
             }
             (mut parser, TokenType::LPAREN, _) => {
                 consume!(parser, ctx, Expr, expr);
                 check!(parser, ctx, RPAREN);
-                (parser, Expr::Paren(Box::new(expr)))
+                let end = Span::mark_range(&parser);
+                (parser, ExprKind::Paren(Box::new(expr)).to_expr(start.finish(end)))
             }
             (mut parser, TokenType::IF, _) => {
                 consume!(parser, ctx, Expr, expr);
@@ -387,19 +460,22 @@ impl<'a, 'b> Consume<'a, 'b> for Expr {
                 consume!(parser, ctx, Expr, expr2);
                 check!(parser, ctx, ELSE);
                 consume!(parser, ctx, Expr, expr3);
-                (parser, Expr::If(Box::new(expr), Box::new(expr2), Box::new(expr3), Type::None))
+                let end = Span::mark_range(&parser);
+                (parser, ExprKind::If(Box::new(expr), Box::new(expr2), Box::new(expr3), Type::NONE).to_expr(start.finish(end)))
             }
             (mut parser, TokenType::ARRAY, _) => {
                 check!(parser, ctx, LSQUARE);
                 consume_list!(parser, ctx, RSQUARE, fields);
                 consume!(parser, ctx, Expr, expr);
-                (parser, Expr::ArrayLoop(fields, Box::new(expr), Type::None))
+                let end = Span::mark_range(&parser);
+                (parser, ExprKind::ArrayLoop(fields, Box::new(expr), Type::NONE).to_expr(start.finish(end)))
             }
             (mut parser, TokenType::SUM, _) => {
                 check!(parser, ctx, LSQUARE);
                 consume_list!(parser, ctx, RSQUARE, fields);
                 consume!(parser, ctx, Expr, expr);
-                (parser, Expr::SumLoop(fields, Box::new(expr), Type::None))
+                let end = Span::mark_range(&parser);
+                (parser, ExprKind::SumLoop(fields, Box::new(expr), Type::NONE).to_expr(start.finish(end)))
             }
             (_, t, _) => miss!(parser,
                 "expected start of expression (INTVAL | FLOATVAL | TRUE | FALSE | VARIABLE | LSQUARE | LPAREN | LCURLY), found {t:?}"
@@ -407,22 +483,40 @@ impl<'a, 'b> Consume<'a, 'b> for Expr {
         };
 
         let (parser, expr) = loop {
-            let (rem_parser, new_expr) = match (parser.next_type(ctx), &expr) {
+            let start = Span::mark_range(&parser);
+            let (rem_parser, new_expr) = match (parser.next_type(ctx), &expr.kind) {
                 ((mut parser, TokenType::LSQUARE), _) => {
                     consume_list!(parser, ctx, RSQUARE, exprs);
-                    (parser, Expr::ArrayIndex(Box::new(expr), exprs, Type::None))
+                    let end = Span::mark_range(&parser);
+                    (
+                        parser,
+                        ExprKind::ArrayIndex(Box::new(expr), exprs, Type::NONE)
+                            .to_expr(start.finish(end)),
+                    )
                 }
-                ((mut parser, TokenType::LPAREN), Expr::Variable(s, _)) => {
+                ((mut parser, TokenType::LPAREN), ExprKind::Variable(s, _)) => {
                     consume_list!(parser, ctx, RPAREN, exprs);
-                    (parser, Expr::Call(*s, exprs, Type::None))
+                    let end = Span::mark_range(&parser);
+                    (
+                        parser,
+                        ExprKind::Call(*s, exprs, Type::NONE).to_expr(start.finish(end)),
+                    )
                 }
-                ((mut parser, TokenType::LCURLY), Expr::Variable(s, _)) => {
+                ((mut parser, TokenType::LCURLY), ExprKind::Variable(s, _)) => {
                     consume_list!(parser, ctx, RCURLY, exprs);
-                    (parser, Expr::StructLiteral(*s, exprs, Type::None))
+                    let end = Span::mark_range(&parser);
+                    (
+                        parser,
+                        ExprKind::StructLiteral(*s, exprs, Type::NONE).to_expr(start.finish(end)),
+                    )
                 }
                 ((mut parser, TokenType::DOT), _) => {
                     consume!(parser, ctx, Variable, var);
-                    (parser, Expr::Dot(Box::new(expr), var, Type::None))
+                    let end = Span::mark_range(&parser);
+                    (
+                        parser,
+                        ExprKind::Dot(Box::new(expr), var, Type::NONE).to_expr(start.finish(end)),
+                    )
                 }
                 (
                     (
@@ -450,32 +544,49 @@ impl<'a, 'b> Consume<'a, 'b> for Expr {
                         right_expr: Expr,
                     ) -> Expr {
                         if op.precedence() < right_expr.precedence() {
-                            Expr::Binop(Box::new(new_expr), op, Box::new(right_expr), Type::None)
-                        } else {
-                            match right_expr {
-                                Expr::Binop(mut right_expr_left, c2, right_expr_right, _) => {
-                                    Expr::Binop(
-                                        {
-                                            // reuxe the allocation from right_expr_left
-                                            *right_expr_left = rearrange_according_to_precedence(
-                                                new_expr,
-                                                op,
-                                                *right_expr_left,
-                                            );
-                                            right_expr_left
-                                        },
-                                        c2,
-                                        right_expr_right,
-                                        Type::None,
-                                    )
-                                }
-                                _ => Expr::Binop(
-                                    Box::new(new_expr),
+                            let left_expr_span = new_expr.span;
+                            let right_expr_span = right_expr.span;
+
+                            ExprKind::Binop(
+                                Box::new(new_expr),
+                                op,
+                                Box::new(right_expr),
+                                Type::NONE,
+                            )
+                            .to_expr(Span::Range(left_expr_span.start(), right_expr_span.end()))
+                        } else if let ExprKind::Binop(mut right_expr_left, c2, right_expr_right, _) = right_expr.kind {
+                            let left_expr = {
+                                // reuxe the allocation from right_expr_left
+                                *right_expr_left = rearrange_according_to_precedence(
+                                    new_expr,
                                     op,
-                                    Box::new(right_expr),
-                                    Type::None,
-                                ),
-                            }
+                                    *right_expr_left,
+                                );
+                                right_expr_left
+                            };
+
+                            let left_expr_span = left_expr.span;
+                            let right_expr_span = right_expr_right.span;
+
+                            ExprKind::Binop(left_expr, c2, right_expr_right, Type::NONE)
+                                .to_expr(Span::Range(
+                                    left_expr_span.start(),
+                                    right_expr_span.end(),
+                                ))
+                        } else {
+                            let left_expr_span = new_expr.span;
+                            let right_expr_span = right_expr.span;
+
+                            ExprKind::Binop(
+                                Box::new(new_expr),
+                                op,
+                                Box::new(right_expr),
+                                Type::NONE,
+                            )
+                            .to_expr(Span::Range(
+                                left_expr_span.start(),
+                                right_expr_span.end(),
+                            ))
                         }
                     }
 
@@ -491,7 +602,7 @@ impl<'a, 'b> Consume<'a, 'b> for Expr {
             expr = new_expr;
         };
 
-        parser.complete_range(expr, &range)
+        parser.complete(expr)
     }
 }
 
@@ -505,7 +616,6 @@ impl<'a, 'b> Consume<'a, 'b> for LValue {
     fn consume(parser: Parser, ctx: &'b ParserContext<'a>) -> ParseResult<'a, Self> {
         measure!("lvalue");
         let next = parser.next(ctx);
-        let range = SourceInfo::mark_range(&parser);
         let (parser, lv) = match (next.0, next.1.get_type()) {
             (parser, TokenType::VARIABLE) => {
                 (parser, LValue::Var(Variable(next.1.get_index(), next.2)))
@@ -524,13 +634,12 @@ impl<'a, 'b> Consume<'a, 'b> for LValue {
             _ => (parser, lv),
         };
 
-        parser.complete_range(lv, &range)
+        parser.complete(lv)
     }
 }
 
 #[derive(Debug, Clone)]
-pub enum Type {
-    // TODO maybe add wrapping type?
+pub enum TypeKind {
     Struct(Variable),
     Array(Box<Type>, u8),
     Float,
@@ -540,35 +649,61 @@ pub enum Type {
     None,
 }
 
-impl PartialEq for Type {
+impl PartialEq for TypeKind {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (Type::Struct(s), Type::Struct(o)) => s == o,
-            (Type::Array(s, l), Type::Array(o, l2)) => s == o && l == l2,
-            (Type::Float, Type::Float)
-            | (Type::Int, Type::Int)
-            | (Type::Bool, Type::Bool)
-            | (Type::Void, Type::Void) => true,
+            (TypeKind::Struct(s), TypeKind::Struct(o)) => s == o,
+            (TypeKind::Array(s, l), TypeKind::Array(o, l2)) => s.kind == o.kind && l == l2,
+            (TypeKind::Float, TypeKind::Float)
+            | (TypeKind::Int, TypeKind::Int)
+            | (TypeKind::Bool, TypeKind::Bool)
+            | (TypeKind::Void, TypeKind::Void) => true,
             _ => false,
         }
+    }
+}
+
+impl TypeKind {
+    #[must_use] 
+    pub fn to_type(self, span: Span) -> Type { 
+        Type { kind: self, span }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Type {
+    pub kind: TypeKind,
+    pub span: Span,
+}
+
+impl Type {
+    const NONE: Type = Type {
+        kind: TypeKind::None,
+        span: Span::Builtin,
+    };
+}
+
+impl From<Type> for TypeKind {
+    fn from(val: Type) -> Self {
+        val.kind
     }
 }
 
 impl<'a, 'b> Consume<'a, 'b> for Type {
     fn consume(parser: Parser, ctx: &'b ParserContext<'a>) -> ParseResult<'a, Self> {
         measure!("type");
-        let range = SourceInfo::mark_range(&parser);
+        let start = Span::mark_range(&parser);
 
-        let next = parser.next(ctx);
-        let (mut parser, mut ty) = match (next.0, next.1.get_type()) {
-            (parser, TokenType::VARIABLE) => {
-                (parser, Type::Struct(Variable(next.1.get_index(), next.2)))
+        let (mut parser, tt, span) = parser.next(ctx);
+        let mut ty = match tt.get_type() {
+            TokenType::VARIABLE => {
+                TypeKind::Struct(Variable(tt.get_index(), span)).to_type(span)
             }
-            (parser, TokenType::INT) => (parser, Type::Int),
-            (parser, TokenType::BOOL) => (parser, Type::Bool),
-            (parser, TokenType::VOID) => (parser, Type::Void),
-            (parser, TokenType::FLOAT) => (parser, Type::Float),
-            (_, t) => miss!(
+            TokenType::INT => TypeKind::Int.to_type(span),
+            TokenType::BOOL => TypeKind::Bool.to_type(span),
+            TokenType::VOID => TypeKind::Void.to_type(span),
+            TokenType::FLOAT => TypeKind::Float.to_type(span),
+            t => miss!(
                 parser,
                 "expected start of type (VARIABLE | FLOAT | LCURLY), found {t:?}"
             ),
@@ -593,10 +728,10 @@ impl<'a, 'b> Consume<'a, 'b> for Type {
                 }
             }
 
-            ty = Self::Array(Box::new(ty), depth);
+            ty = TypeKind::Array(Box::new(ty), depth).to_type(start.finish(Span::mark_range(&parser)));
         }
 
-        parser.complete_range(ty, &range)
+        parser.complete(ty)
     }
 }
 
@@ -607,11 +742,10 @@ impl<'a, 'b> Consume<'a, 'b> for Binding {
     fn consume(parser: Parser, ctx: &'b ParserContext<'a>) -> ParseResult<'a, Self> {
         measure!("binding");
         localize_error!(parser, ctx, Binding, {
-            let range = SourceInfo::mark_range(&parser);
             consume!(parser, ctx, LValue, lv);
             check!(parser, ctx, COLON);
             consume!(parser, ctx, Type, ty);
-            parser.complete_range(Binding(lv, ty), &range)
+            parser.complete(Binding(lv, ty))
         })
     }
 }
@@ -625,7 +759,7 @@ pub fn parse<'a>(
     string_map: &'a [&'a str],
     source: &'a str,
     path: &'a Path,
-) -> Result<(Vec<Cmd>, Vec<usize>)> {
+) -> Result<(Vec<Command>, Vec<usize>)> {
     measure!("parse");
     let mut cmds = vec![];
     let mut tokens_consumed = vec![];
@@ -643,15 +777,15 @@ pub fn parse<'a>(
     let ctx = &ctx;
 
     while !parser.is_empty(ctx) {
-        let cmd = Cmd::consume(parser, ctx);
+        let cmd = Command::consume(parser, ctx);
 
         match cmd {
-            ParseResult::Parsed(moved_parser, cmd, _) => {
+            ParseResult::Parsed(moved_parser, cmd) => {
                 parser = moved_parser;
 
                 tokens_consumed.push(parser.current_position);
 
-                let cmd: Cmd = cmd;
+                let cmd: Command = cmd;
 
                 cmds.push(cmd);
             }

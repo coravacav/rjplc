@@ -1,8 +1,8 @@
 use std::cell::Cell;
 
 use super::{
-    Binding, Cmd, Expr, Field, LValue, LiteralString, LoopField, Op, Statement, TokenType, Type,
-    Variable, Write,
+    Binding, Command, CommandKind, Expr, ExprKind, Field, LValue, LiteralString, LoopField, Op,
+    Statement, StatementKind, TokenType, Type, TypeKind, Variable, Write,
 };
 use crate::{CustomDisplay, PRINT_TYPES};
 
@@ -90,34 +90,34 @@ macro_rules! disp_help {
     };
 }
 
-impl CustomDisplay for Cmd {
+impl CustomDisplay for Command {
     fn fmt(&self, f: &mut String, string_map: &[&str]) -> std::fmt::Result {
-        match self {
-            Cmd::Read(file, lvalue) => {
+        match &self.kind {
+            CommandKind::Read(file, lvalue) => {
                 disp_help!(f, string_map, str "(ReadCmd ", fmt file, char ' ', fmt lvalue, char ')')
             }
-            Cmd::Write(expr, file) => {
+            CommandKind::Write(expr, file) => {
                 disp_help!(f, string_map, str "(WriteCmd ", fmt expr, char ' ', fmt file, char ')')
             }
-            Cmd::Let(lvalue, expr) => {
+            CommandKind::Let(lvalue, expr) => {
                 disp_help!(f, string_map, str "(LetCmd ", fmt lvalue, char ' ', fmt expr, char ')')
             }
-            Cmd::Assert(expr, msg) => {
+            CommandKind::Assert(expr, msg) => {
                 disp_help!(f, string_map, str "(AssertCmd ", fmt expr, char ' ', fmt msg, char ')')
             }
-            Cmd::Print(msg) => {
+            CommandKind::Print(msg) => {
                 disp_help!(f, string_map, str "(PrintCmd ", fmt msg, char ')')
             }
-            Cmd::Show(expr) => {
+            CommandKind::Show(expr) => {
                 disp_help!(f, string_map, str "(ShowCmd ", fmt expr, char ')')
             }
-            Cmd::Time(cmd) => {
+            CommandKind::Time(cmd) => {
                 disp_help!(f, string_map, str "(TimeCmd ", fmt cmd, char ')')
             }
-            Cmd::Fn(name, bindings, ty, statements) => {
+            CommandKind::Fn(name, bindings, ty, statements) => {
                 disp_help!(f, string_map, str "(FnCmd ", fmt name, str " ((", joinedns bindings, str ")) ", fmt ty, char ' ', joinedns statements, char ')')
             }
-            Cmd::Struct(name, fields) => {
+            CommandKind::Struct(name, fields) => {
                 disp_help!(f, string_map, str "(StructCmd ", fmt name, joined fields, char ')')
             }
         }
@@ -125,14 +125,14 @@ impl CustomDisplay for Cmd {
 }
 impl CustomDisplay for Statement {
     fn fmt(&self, f: &mut String, string_map: &[&str]) -> std::fmt::Result {
-        match self {
-            Statement::Let(lvalue, expr) => {
+        match &self.kind {
+            StatementKind::Let(lvalue, expr) => {
                 disp_help!(f, string_map, str "(LetStmt ", fmt lvalue, char ' ', fmt expr, char ')')
             }
-            Statement::Assert(expr, msg) => {
+            StatementKind::Assert(expr, msg) => {
                 disp_help!(f, string_map, str "(AssertStmt ", fmt expr, char ' ', fmt msg, char ')')
             }
-            Statement::Return(expr) => {
+            StatementKind::Return(expr) => {
                 disp_help!(f, string_map, str "(ReturnStmt ", fmt expr, char ')')
             }
         }
@@ -162,8 +162,8 @@ impl CustomDisplay for Op {
 impl CustomDisplay for Expr {
     #[allow(clippy::too_many_lines)]
     fn fmt(&self, f: &mut String, string_map: &[&str]) -> std::fmt::Result {
-        match self {
-            Expr::Int(_, i, _) => {
+        match &self.kind {
+            ExprKind::Int(_, i) => {
                 let i = {
                     let i = string_map[*i].trim_start_matches('0');
                     if i.is_empty() {
@@ -179,7 +179,7 @@ impl CustomDisplay for Expr {
                     write!(f, "(IntExpr {i})")
                 }
             }
-            Expr::Float(fl, s_fl, _) => string_map[*s_fl]
+            ExprKind::Float(fl, s_fl) => string_map[*s_fl]
                 .split_once('.')
                 .map(|(trunc, _)| {
                     let trunc = trunc.trim_start_matches('0');
@@ -201,32 +201,32 @@ impl CustomDisplay for Expr {
                     }
                 })
                 .unwrap(),
-            Expr::True(_) => {
+            ExprKind::True => {
                 if PRINT_TYPES.with(Cell::get) {
                     write!(f, "(TrueExpr (BoolType))")
                 } else {
                     write!(f, "(TrueExpr)")
                 }
             }
-            Expr::False(_) => {
+            ExprKind::False => {
                 if PRINT_TYPES.with(Cell::get) {
                     write!(f, "(FalseExpr (BoolType))")
                 } else {
                     write!(f, "(FalseExpr)")
                 }
             }
-            Expr::Void(_) => {
+            ExprKind::Void => {
                 if PRINT_TYPES.with(Cell::get) {
                     write!(f, "(VoidExpr (VoidType))")
                 } else {
                     write!(f, "(VoidExpr)")
                 }
             }
-            Expr::Variable(s, ty) => {
+            ExprKind::Variable(s, ty) => {
                 disp_help!(f, string_map, str "(VarExpr ", type ty, fmt s, char ')')
             }
-            Expr::Paren(expr) => expr.fmt(f, string_map),
-            Expr::ArrayLiteral(exprs, ty) => {
+            ExprKind::Paren(expr) => expr.fmt(f, string_map),
+            ExprKind::ArrayLiteral(exprs, ty) => {
                 if exprs.is_empty() {
                     f.write_str("(ArrayLiteralExpr)")
                 } else {
@@ -236,28 +236,28 @@ impl CustomDisplay for Expr {
                     f.write_char(')')
                 }
             }
-            Expr::ArrayIndex(s, exprs, ty) => {
+            ExprKind::ArrayIndex(s, exprs, ty) => {
                 disp_help!(f, string_map, str "(ArrayIndexExpr ", type ty, fmt s, joined exprs, char ')')
             }
-            Expr::Binop(expr, op, expr2, ty) => {
+            ExprKind::Binop(expr, op, expr2, ty) => {
                 disp_help!(f, string_map, str "(BinopExpr ", type ty, fmt expr, char ' ', fmt op, char ' ', fmt expr2, char ')')
             }
-            Expr::Call(expr, exprs, ty) => {
+            ExprKind::Call(expr, exprs, ty) => {
                 disp_help!(f, string_map, str "(CallExpr ", type ty, fmt expr, joined exprs, char ')')
             }
-            Expr::StructLiteral(s, exprs, ty) => {
+            ExprKind::StructLiteral(s, exprs, ty) => {
                 disp_help!(f, string_map, str "(StructLiteralExpr ", type ty, fmt s, joined exprs, char ')')
             }
-            Expr::Dot(expr, s, ty) => {
+            ExprKind::Dot(expr, s, ty) => {
                 disp_help!(f, string_map, str "(DotExpr ", type ty, fmt expr, char ' ', fmt s, char ')')
             }
-            Expr::Unop(op, expr, ty) => {
+            ExprKind::Unop(op, expr, ty) => {
                 disp_help!(f, string_map, str "(UnopExpr ", type ty, fmt op, char ' ', fmt expr, char ')')
             }
-            Expr::If(expr, expr2, expr3, ty) => {
+            ExprKind::If(expr, expr2, expr3, ty) => {
                 disp_help!(f, string_map, str "(IfExpr ", type ty, fmt expr, char ' ', fmt expr2, char ' ', fmt expr3, char ')')
             }
-            Expr::ArrayLoop(fields, expr, ty) => {
+            ExprKind::ArrayLoop(fields, expr, ty) => {
                 f.write_str("(ArrayLoopExpr ")?;
                 ty.fmt_if(f, string_map)?;
                 if !fields.is_empty() {
@@ -267,7 +267,7 @@ impl CustomDisplay for Expr {
                 expr.fmt(f, string_map)?;
                 write!(f, ")")
             }
-            Expr::SumLoop(fields, expr, ty) => {
+            ExprKind::SumLoop(fields, expr, ty) => {
                 f.write_str("(SumLoopExpr ")?;
                 ty.fmt_if(f, string_map)?;
                 if !fields.is_empty() {
@@ -292,24 +292,24 @@ impl CustomDisplay for LValue {
 }
 impl CustomDisplay for Type {
     fn fmt(&self, f: &mut String, string_map: &[&str]) -> std::fmt::Result {
-        match self {
-            Type::Struct(Variable(s, _)) => {
+        match &self.kind {
+            TypeKind::Struct(Variable(s, _)) => {
                 f.write_str("(StructType ")?;
                 f.write_str(string_map[*s])?;
                 f.write_char(')')
             }
-            Type::Array(s, i) => {
+            TypeKind::Array(s, i) => {
                 f.write_str("(ArrayType ")?;
                 s.fmt(f, string_map)?;
                 f.write_char(' ')?;
                 write!(f, "{i}")?;
                 f.write_char(')')
             }
-            Type::Float => f.write_str("(FloatType)"),
-            Type::Int => f.write_str("(IntType)"),
-            Type::Bool => f.write_str("(BoolType)"),
-            Type::Void => f.write_str("(VoidType)"),
-            Type::None => Ok(()),
+            TypeKind::Float => f.write_str("(FloatType)"),
+            TypeKind::Int => f.write_str("(IntType)"),
+            TypeKind::Bool => f.write_str("(BoolType)"),
+            TypeKind::Void => f.write_str("(VoidType)"),
+            TypeKind::None => Ok(()),
         }
     }
 }
@@ -317,8 +317,8 @@ impl CustomDisplay for Type {
 impl Type {
     /// # Errors
     pub fn fmt_if(&self, f: &mut String, string_map: &[&str]) -> std::fmt::Result {
-        match self {
-            Type::None => return Ok(()),
+        match &self.kind {
+            TypeKind::None => return Ok(()),
             _ => self.fmt(f, string_map)?,
         }
         f.write_char(' ')
