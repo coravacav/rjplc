@@ -1,12 +1,12 @@
 [package]
 name = "rjplc"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 publish = false
 
 [dependencies]
 ahash = "0.8.11"
-anyhow = "1.0.95"
+anyhow = "1.0.96"
 clap = { version = "4.5", features = ["derive"] }
 colored = "3.0.0"
 divan = "0.1.17"
