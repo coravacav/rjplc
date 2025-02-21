@@ -550,7 +550,7 @@ impl TypeFill for Expr {
                     );
                 }
             }
-            ExprKind::ArrayLiteral(exprs, ref mut ty) => {
+            ExprKind::ArrayLiteral(exprs, ty) => {
                 if exprs.is_empty() {
                     bail!("empty array literal");
                 }

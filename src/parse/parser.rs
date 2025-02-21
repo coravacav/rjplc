@@ -99,7 +99,7 @@ pub fn consume_list_impl<'a, 'b, T: Consume<'a, 'b> + std::fmt::Debug>(
 }
 
 macro_rules! consume_list {
-    ($parser:ident, $ctx:ident, $end_token:tt, $delimeter:tt, $delimeter_terminated:expr, $outvar:ident) => {
+    ($parser:ident, $ctx:ident, $end_token:tt, $delimeter:tt, $delimeter_terminated:expr_2021, $outvar:ident) => {
         let (advanced_parser, $outvar) = match consume_list_impl(
             $parser,
             $ctx,
@@ -136,7 +136,7 @@ macro_rules! check {
 }
 
 macro_rules! localize_error {
-    ($parser:ident, $ctx:ident, $ty:ty, $function_body:expr) => {{
+    ($parser:ident, $ctx:ident, $ty:ty, $function_body:expr_2021) => {{
         fn inner_func<'a>(mut $parser: Parser, $ctx: &ParserContext<'a>) -> ParseResult<'a, $ty> {
             $function_body
         }

@@ -49,7 +49,7 @@ impl Drop for MeasureHandle {
 
 #[macro_export]
 macro_rules! measure {
-    ($name:expr) => {
+    ($name:expr_2021) => {
         #[cfg(feature = "measure")]
         let _measure = $crate::measure::MeasureHandle {
             name: $name,
