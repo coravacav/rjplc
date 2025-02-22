@@ -4,7 +4,7 @@ use std::{io::stdout, path::PathBuf, process::exit};
 
 use clap::{ArgGroup, Parser};
 use measure::print_timings;
-use rjplc::{lex, measure, parse, typecheck, CustomDisplay};
+use rjplc::{CustomDisplay, lex, measure, parse, typecheck};
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -42,6 +42,7 @@ fn main() {
 
     if !args.parse && !args.typecheck {
         print_output(args.quiet, &tokens, &string_map, true);
+        return;
     }
 
     let (mut cmds, tokens_consumed) =
