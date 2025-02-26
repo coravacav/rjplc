@@ -35,6 +35,14 @@ bench-t-t-q:
     just cr
     hyperfine 'target/release/rjplc -tq t.jpl' --warmup 25
 
+bench-compare-t-t:
+    hyperfine \
+    'comparisons/gramn/main -p t.jpl > /dev/null' \
+    'target/release/rjplc -p t.jpl > /dev/null' \
+    'target/release/rjplc-old -p t.jpl > /dev/null' \
+    'comparisons/edward/myjplc -p t.jpl > /dev/null' \
+    --warmup 10
+
 cr: cargo-build-release
 cargo-build-release:
     cargo build --release
